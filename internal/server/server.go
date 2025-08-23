@@ -119,16 +119,17 @@ func (s *Server) setTrace(_ *glsp.Context, p *protocol.SetTraceParams) error {
 }
 
 func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams) error {
-	s.state.SetDocument(p.TextDocument.URI, p.TextDocument.Text)
+	s.state.SetDocument(p.TextDocument.URI, p.TextDocument.Text, p.TextDocument.LanguageID)
 	return nil
 }
 
 func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentParams) error {
-	text, ok := s.state.GetDocument(p.TextDocument.URI)
+	doc, ok := s.state.GetDocument(p.TextDocument.URI)
 	if !ok {
 		return nil
 	}
 
+	text := doc.Text
 	for _, c := range p.ContentChanges {
 		switch ch := c.(type) {
 		case protocol.TextDocumentContentChangeEventWhole:
@@ -141,7 +142,7 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 			}
 		}
 	}
-	s.state.SetDocument(p.TextDocument.URI, text)
+	s.state.SetDocument(p.TextDocument.URI, text, doc.LanguageID)
 	return nil
 }
 
@@ -151,10 +152,12 @@ func (s *Server) didClose(_ *glsp.Context, p *protocol.DidCloseTextDocumentParam
 }
 
 func (s *Server) onDefinition(_ *glsp.Context, p *protocol.DefinitionParams) (any, error) {
-	text, ok := s.state.GetDocument(p.TextDocument.URI)
+	doc, ok := s.state.GetDocument(p.TextDocument.URI)
 	if !ok {
 		return nil, nil
 	}
+
+	text := doc.Text
 
 	if twigPath, ok := twig.PathAt(text, p.Position); ok {
 		if target, ok := twig.Resolve(twigPath, s.config.Container); ok {
@@ -163,6 +166,18 @@ func (s *Server) onDefinition(_ *glsp.Context, p *protocol.DefinitionParams) (an
 				Range: protocol.Range{Start: protocol.Position{Line: 0, Character: 0}, End: protocol.Position{Line: 0, Character: 0}},
 			}
 			return []protocol.Location{loc}, nil
+		}
+	}
+
+	if doc.LanguageID == "twig" {
+		if twigFunc, ok := twig.FunctionAt(text, p.Position); ok {
+			if target, functionRange, ok := twig.ResolveFunction(twigFunc, s.config); ok {
+				loc := protocol.Location{
+					URI:   protocol.DocumentUri(utils.PathToURI(target)),
+					Range: functionRange,
+				}
+				return []protocol.Location{loc}, nil
+			}
 		}
 	}
 

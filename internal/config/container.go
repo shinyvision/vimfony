@@ -17,6 +17,7 @@ type ContainerConfig struct {
 	BundleRoots      map[string][]string
 	ServiceClasses   map[string]string
 	ServiceAliases   map[string]string
+	TwigExtensions   map[string]string
 }
 
 func NewContainerConfig() *ContainerConfig {
@@ -25,6 +26,7 @@ func NewContainerConfig() *ContainerConfig {
 		BundleRoots:    make(map[string][]string),
 		ServiceClasses: make(map[string]string),
 		ServiceAliases: make(map[string]string),
+		TwigExtensions: make(map[string]string),
 	}
 }
 
@@ -66,6 +68,11 @@ func (c *ContainerConfig) LoadFromXML() {
 
 	c.ServiceClasses = make(map[string]string)
 	c.ServiceAliases = make(map[string]string)
+	c.TwigExtensions = make(map[string]string)
+
+	var serviceID string
+	var serviceClass string
+	serviceDepth := 0
 
 	for {
 		tok, err := dec.Token()
@@ -82,25 +89,42 @@ func (c *ContainerConfig) LoadFromXML() {
 
 			// Parse service definitions and aliases
 			if local == "service" {
-				id := ""
-				class := ""
-				alias := ""
-				for _, a := range t.Attr {
-					switch a.Name.Local {
-					case "id":
-						id = a.Value
-					case "class":
-						class = a.Value
-					case "alias":
-						alias = a.Value
+				if serviceDepth == 0 {
+					id := ""
+					class := ""
+					alias := ""
+					for _, a := range t.Attr {
+						switch a.Name.Local {
+						case "id":
+							id = a.Value
+						case "class":
+							class = a.Value
+						case "alias":
+							alias = a.Value
+						}
+					}
+					if id != "" {
+						serviceID = id
+						if class != "" {
+							c.ServiceClasses[id] = class
+							serviceClass = class
+						} else if alias != "" {
+							c.ServiceAliases[id] = alias
+							serviceClass = ""
+						}
 					}
 				}
-				if id != "" {
-					if class != "" {
-						c.ServiceClasses[id] = class
-					} else if alias != "" {
-						c.ServiceAliases[id] = alias
+				serviceDepth++
+			} else if serviceDepth > 0 && local == "tag" {
+				name := ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "name" {
+						name = a.Value
+						break
 					}
+				}
+				if name == "twig.extension" && serviceID != "" && serviceClass != "" {
+					c.TwigExtensions[serviceID] = serviceClass
 				}
 			}
 
@@ -147,6 +171,14 @@ func (c *ContainerConfig) LoadFromXML() {
 
 		case xml.EndElement:
 			local := t.Name.Local
+
+			if local == "service" {
+				serviceDepth--
+				if serviceDepth == 0 {
+					serviceID = ""
+					serviceClass = ""
+				}
+			}
 
 			if inTargetService {
 				if inAddPathCall && local == "argument" {

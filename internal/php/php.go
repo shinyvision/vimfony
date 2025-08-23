@@ -35,7 +35,7 @@ func Resolve(className string, psr4Map config.Psr4Map, workspaceRoot string) (st
 			for _, path := range paths {
 				relPath := strings.Replace(className, namespace, "", 1)
 				relPath = strings.ReplaceAll(relPath, "\\", string(filepath.Separator)) + ".php"
-				
+
 				absPath := path
 				if !filepath.IsAbs(absPath) {
 					absPath = filepath.Join(workspaceRoot, path)
