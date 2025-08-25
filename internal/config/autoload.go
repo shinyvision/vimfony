@@ -9,14 +9,14 @@ import (
 
 type Psr4Map map[string][]string
 
-func GetPsr4Map(autoloadFile string) (Psr4Map, error) {
+func GetPsr4Map(autoloadFile, phpPath string) (Psr4Map, error) {
 	// It is important to use the absolute path to the file, otherwise php will not find it.
 	absAutoloadFile, err := filepath.Abs(autoloadFile)
 	if err != nil {
 		return nil, fmt.Errorf("could not get absolute path for %s: %w", autoloadFile, err)
 	}
 
-	cmd := exec.Command("php", "-r", fmt.Sprintf("echo json_encode(require '%s');", absAutoloadFile))
+	cmd := exec.Command(phpPath, "-r", fmt.Sprintf("echo json_encode(require '%s');", absAutoloadFile))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("could not execute php script: %w", err)

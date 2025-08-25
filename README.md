@@ -54,6 +54,8 @@ configs.vimfony = {
       roots = { "templates" },
       container_xml_path = util.root_pattern("composer.json", ".git")() .. "/var/cache/dev/App_KernelDevDebugContainer.xml", -- Where your container XML is
       vendor_dir = util.root_pattern("composer.json", ".git")() .. "/vendor", -- Where your vendor directory is
+      -- Optional:
+      -- php_path = "/usr/bin/php",
     },
   },
 }

@@ -11,7 +11,7 @@ func TestGetPsr4Map(t *testing.T) {
 	mockAutoloadFile, err := filepath.Abs("../../mock/autoload_psr4.php")
 	assert.NoError(t, err)
 
-	psr4Map, err := GetPsr4Map(mockAutoloadFile)
+	psr4Map, err := GetPsr4Map(mockAutoloadFile, "/usr/bin/php")
 	assert.NoError(t, err)
 
 	mockDir, err := filepath.Abs("../../mock")

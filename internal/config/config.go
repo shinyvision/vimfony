@@ -10,12 +10,14 @@ type Config struct {
 	Container *ContainerConfig
 	Psr4      Psr4Map
 	VendorDir string
+	PhpPath   string
 }
 
 func NewConfig() *Config {
 	return &Config{
 		Container: NewContainerConfig(),
 		Psr4:      make(Psr4Map),
+		PhpPath:   "php",
 	}
 }
 
@@ -31,7 +33,7 @@ func (c *Config) LoadPsr4Map() {
 		absPath = filepath.Join(c.Container.WorkspaceRoot, absPath)
 	}
 
-	psr4Map, err := GetPsr4Map(absPath)
+	psr4Map, err := GetPsr4Map(absPath, c.PhpPath)
 	if err != nil {
 		logger.Warningf("could not load psr4 map: %v", err)
 		return
@@ -40,3 +42,4 @@ func (c *Config) LoadPsr4Map() {
 	c.Psr4 = psr4Map
 	logger.Infof("loaded %d psr-4 mappings", len(c.Psr4))
 }
+

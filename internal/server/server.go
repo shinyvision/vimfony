@@ -89,6 +89,11 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 					s.config.Container.ContainerXMLPath = str
 				}
 			}
+			if phpp, ok := m["php_path"]; ok {
+				if str, ok := phpp.(string); ok && str != "" {
+					s.config.PhpPath = str
+				}
+			}
 			if vdp, ok := m["vendor_dir"]; ok {
 				if str, ok := vdp.(string); ok && str != "" {
 					s.config.VendorDir = str
