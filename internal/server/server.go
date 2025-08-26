@@ -230,74 +230,8 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 		return nil, nil
 	}
 
-	text := doc.Text
-	pos := p.Position
-
-	lines := strings.Split(text, "\n")
-	if pos.Line >= uint32(len(lines)) {
-		return nil, nil
-	}
-	line := lines[pos.Line]
-	if pos.Character > uint32(len(line)) {
-		return nil, nil
-	}
-	lineUntilCursor := line[:pos.Character]
-
-	atIndex := strings.LastIndex(lineUntilCursor, "@")
-	if atIndex == -1 {
-		return nil, nil
-	}
-
-	prefix := lineUntilCursor[atIndex+1:]
-
-	if doc.LanguageID == "php" {
-		// check if we are inside a string
-		sQuoteCountBefore := strings.Count(lineUntilCursor[:atIndex], "'")
-		sQuoteCountAfter := strings.Count(line[pos.Character:], "'")
-		inSingleQuotes := sQuoteCountBefore%2 == 1 && sQuoteCountAfter%2 == 1
-
-		dQuoteCountBefore := strings.Count(lineUntilCursor[:atIndex], "\"")
-		dQuoteCountAfter := strings.Count(line[pos.Character:], "\"")
-		inDoubleQuotes := dQuoteCountBefore%2 == 1 && dQuoteCountAfter%2 == 1
-
-		if !inSingleQuotes && !inDoubleQuotes {
-			return nil, nil
-		}
-
-		currentLineNum := int(p.Position.Line)
-
-		// Search backwards for autoconfigure attribute
-		autoConfigureLineNum := -1
-		for i := currentLineNum; i >= 0; i-- {
-			if strings.Contains(lines[i], "#[Autoconfigure") || strings.Contains(lines[i], "Autoconfigure(") {
-				autoConfigureLineNum = i
-				break
-			}
-		}
-
-		if autoConfigureLineNum == -1 {
-			return nil, nil // Not in an Autoconfigure block
-		}
-
-		// Search forwards from the Autoconfigure line to find `class `
-		classLineNum := -1
-		for i := autoConfigureLineNum; i < len(lines); i++ {
-			if strings.HasPrefix(strings.TrimSpace(lines[i]), "class ") {
-				classLineNum = i
-				break
-			}
-		}
-
-		// The cursor must be between the start and end of the block.
-		if classLineNum != -1 && currentLineNum >= classLineNum {
-			return nil, nil
-		}
-
-	} else if doc.LanguageID == "yaml" {
-		if strings.Contains(lineUntilCursor[:atIndex], "#") {
-			return nil, nil
-		}
-	} else {
+	ok, prefix := doc.HasServicePrefix(p.Position)
+	if !ok || !doc.IsInAutoconfigure(int(p.Position.Line)) {
 		return nil, nil
 	}
 

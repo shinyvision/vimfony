@@ -6,12 +6,6 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-// Document represents a document in the state.
-type Document struct {
-	Text       string
-	LanguageID string
-}
-
 // State manages the document state for the language server.
 type State struct {
 	mu   sync.RWMutex
