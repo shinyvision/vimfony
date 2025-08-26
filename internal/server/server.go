@@ -2,6 +2,8 @@ package server
 
 import (
 	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/shinyvision/vimfony/internal/config"
 	"github.com/shinyvision/vimfony/internal/php"
@@ -40,6 +42,7 @@ func NewServer() *Server {
 		TextDocumentDidChange:  s.didChange,
 		TextDocumentDidClose:   s.didClose,
 		TextDocumentDefinition: s.onDefinition,
+		TextDocumentCompletion: s.onCompletion,
 	}
 	return s
 }
@@ -60,6 +63,9 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 	}
 	defProvider := true
 	caps.DefinitionProvider = defProvider
+	caps.CompletionProvider = &protocol.CompletionOptions{
+		TriggerCharacters: []string{"@"},
+	}
 
 	if params.RootURI != nil {
 		s.config.Container.WorkspaceRoot = utils.UriToPath(*params.RootURI)
@@ -216,6 +222,123 @@ func (s *Server) onDefinition(_ *glsp.Context, p *protocol.DefinitionParams) (an
 	}
 
 	return nil, nil
+}
+
+func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (any, error) {
+	doc, ok := s.state.GetDocument(p.TextDocument.URI)
+	if !ok {
+		return nil, nil
+	}
+
+	text := doc.Text
+	pos := p.Position
+
+	lines := strings.Split(text, "\n")
+	if pos.Line >= uint32(len(lines)) {
+		return nil, nil
+	}
+	line := lines[pos.Line]
+	if pos.Character > uint32(len(line)) {
+		return nil, nil
+	}
+	lineUntilCursor := line[:pos.Character]
+
+	atIndex := strings.LastIndex(lineUntilCursor, "@")
+	if atIndex == -1 {
+		return nil, nil
+	}
+
+	prefix := lineUntilCursor[atIndex+1:]
+
+	if doc.LanguageID == "php" {
+		// check if we are inside a string
+		sQuoteCountBefore := strings.Count(lineUntilCursor[:atIndex], "'")
+		sQuoteCountAfter := strings.Count(line[pos.Character:], "'")
+		inSingleQuotes := sQuoteCountBefore%2 == 1 && sQuoteCountAfter%2 == 1
+
+		dQuoteCountBefore := strings.Count(lineUntilCursor[:atIndex], "\"")
+		dQuoteCountAfter := strings.Count(line[pos.Character:], "\"")
+		inDoubleQuotes := dQuoteCountBefore%2 == 1 && dQuoteCountAfter%2 == 1
+
+		if !inSingleQuotes && !inDoubleQuotes {
+			return nil, nil
+		}
+
+		currentLineNum := int(p.Position.Line)
+
+		// Search backwards for autoconfigure attribute
+		autoConfigureLineNum := -1
+		for i := currentLineNum; i >= 0; i-- {
+			if strings.Contains(lines[i], "#[Autoconfigure") || strings.Contains(lines[i], "Autoconfigure(") {
+				autoConfigureLineNum = i
+				break
+			}
+		}
+
+		if autoConfigureLineNum == -1 {
+			return nil, nil // Not in an Autoconfigure block
+		}
+
+		// Search forwards from the Autoconfigure line to find `class `
+		classLineNum := -1
+		for i := autoConfigureLineNum; i < len(lines); i++ {
+			if strings.HasPrefix(strings.TrimSpace(lines[i]), "class ") {
+				classLineNum = i
+				break
+			}
+		}
+
+		// The cursor must be between the start and end of the block.
+		if classLineNum != -1 && currentLineNum >= classLineNum {
+			return nil, nil
+		}
+
+	} else if doc.LanguageID == "yaml" {
+		if strings.Contains(lineUntilCursor[:atIndex], "#") {
+			return nil, nil
+		}
+	} else {
+		return nil, nil
+	}
+
+	items := []protocol.CompletionItem{}
+	seen := make(map[string]bool)
+	kind := protocol.CompletionItemKindKeyword
+
+	for id, class := range s.config.Container.ServiceClasses {
+		if strings.HasPrefix(id, prefix) {
+			if _, ok := seen[id]; !ok {
+				item := protocol.CompletionItem{
+					Label:  id,
+					Kind:   &kind,
+					Detail: &class,
+				}
+				items = append(items, item)
+				seen[id] = true
+			}
+		}
+	}
+
+	for alias, serviceId := range s.config.Container.ServiceAliases {
+		if strings.HasPrefix(alias, prefix) {
+			if _, ok := seen[alias]; !ok {
+				detail := "alias for " + serviceId
+				item := protocol.CompletionItem{
+					Label:  alias,
+					Kind:   &kind,
+					Detail: &detail,
+				}
+				items = append(items, item)
+				seen[alias] = true
+			}
+		}
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return len(items[i].Label) < len(items[j].Label)
+	})
+
+	return items, nil
 }
 
 func logPathStats(cfg *config.Config, context string) {

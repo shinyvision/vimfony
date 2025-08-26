@@ -17,11 +17,12 @@ If you do create a PR, then please don’t try to implement a PHP parser, becaus
 - `gd` Twig functions
 - `gd` class from within yaml files
 - `gd` service definitions for example @service_container
+- Autocomplete service names (works in yaml files and autoconfigure php attributes)
 
 ## Planned features
 These features are not yet implemented but would be useful:
 (feel free to create a PR if you want to contribute)
-- Autocomplete service names
+- Support for XML service configuration
 - Autocomplete Twig files
 - `gd` Twig components
 - Version checker & updater (`vimfony update`)

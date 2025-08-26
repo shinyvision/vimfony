@@ -93,6 +93,7 @@ func (c *ContainerConfig) LoadFromXML() {
 					id := ""
 					class := ""
 					alias := ""
+					isAbstract := false
 					for _, a := range t.Attr {
 						switch a.Name.Local {
 						case "id":
@@ -101,9 +102,11 @@ func (c *ContainerConfig) LoadFromXML() {
 							class = a.Value
 						case "alias":
 							alias = a.Value
+						case "abstract":
+							isAbstract = a.Value == "true"
 						}
 					}
-					if id != "" {
+					if !isAbstract && id != "" && !strings.HasPrefix(id, ".") {
 						serviceID = id
 						if class != "" {
 							c.ServiceClasses[id] = class
@@ -258,4 +261,3 @@ func (c *ContainerConfig) ResolveServiceId(serviceID string) (string, bool) {
 	}
 	return "", false
 }
-
