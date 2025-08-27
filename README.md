@@ -2,12 +2,9 @@
     <img src="https://raw.githubusercontent.com/shinyvision/vimfony/main/.github/assets/vimfony_sm.png" alt="Vimfony Logo">
 </p>
 
-This is a language server that adds some useful jumps for Symfony projects.
+This is a language server that adds Symfony integration in Neovim.
 
 It uses your go-to definition keymapping (`gd` for most vimmers)
-
-I have made this tool because I use [Sylius](https://github.com/Sylius/Sylius) a lot, which works with twig hooks and the amount of twig files can get overwhelming.
-Also, PhpStorm has a Symfony plugin, so us NeoVim users should also have some nice things...
 
 If you find a bug or want a feature, you can create an issue or a PR. I’ll probably take a look at it, but no promises.
 If you do create a PR, then please don’t try to implement a PHP parser, because all Go libraries I’ve found seem to be abandoned. For now, we’ll just simply stream files and rely on string matching to get the work done, and it works pretty reliable so far.
@@ -15,17 +12,23 @@ If you do create a PR, then please don’t try to implement a PHP parser, becaus
 ## Features
 - `gd` Twig templates with @Bundle support
 - `gd` Twig functions
-- `gd` class from within yaml files
+- `gd` class from within yaml / xml files
 - `gd` service definitions for example @service_container
 - Autocomplete service names (works in yaml files and autoconfigure php attributes)
 
 ## Planned features
 These features are not yet implemented but would be useful:
 (feel free to create a PR if you want to contribute)
-- Support for XML service configuration
 - Autocomplete Twig files
+- Autocomplete route names
 - `gd` Twig components
+- `gd` routes
 - Version checker & updater (`vimfony update`)
+
+### Coming up
+You can get these features if you build from source:
+- Support for autocompleting service ids in XML
+- `gd` service definitions in XML files
 
 ## How to use
 You can download a release for your OS and CPU or build from source:
@@ -46,7 +49,7 @@ local util = lspconfig.util
 configs.vimfony = {
   default_config = {
     cmd = { "vimfony" },
-    filetypes = { "php", "twig", "yaml" }, -- You can remove file types if you don’t like it, but then it won’t work in tose files
+    filetypes = { "php", "twig", "yaml", "xml" }, -- You can remove file types if you don't like it, but then it won't work in those files
     root_dir = function(fname)
       return util.root_pattern("composer.json", ".git")(fname)
     end,

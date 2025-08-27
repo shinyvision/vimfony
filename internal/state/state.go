@@ -30,10 +30,7 @@ func (s *State) GetDocument(uri protocol.DocumentUri) (*Document, bool) {
 func (s *State) SetDocument(uri protocol.DocumentUri, text string, languageID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.docs[uri] = &Document{
-		Text:       text,
-		LanguageID: languageID,
-	}
+	s.docs[uri] = NewDocument(languageID, text)
 }
 
 // DeleteDocument removes a document from the state.
@@ -42,3 +39,4 @@ func (s *State) DeleteDocument(uri protocol.DocumentUri) {
 	defer s.mu.Unlock()
 	delete(s.docs, uri)
 }
+

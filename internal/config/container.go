@@ -11,22 +11,24 @@ import (
 )
 
 type ContainerConfig struct {
-	WorkspaceRoot    string
-	ContainerXMLPath string
-	Roots            []string
-	BundleRoots      map[string][]string
-	ServiceClasses   map[string]string
-	ServiceAliases   map[string]string
-	TwigExtensions   map[string]string
+	WorkspaceRoot     string
+	ContainerXMLPath  string
+	Roots             []string
+	BundleRoots       map[string][]string
+	ServiceClasses    map[string]string
+	ServiceAliases    map[string]string
+	TwigExtensions    map[string]string
+	ServiceReferences map[string]int
 }
 
 func NewContainerConfig() *ContainerConfig {
 	return &ContainerConfig{
-		Roots:          []string{"templates"},
-		BundleRoots:    make(map[string][]string),
-		ServiceClasses: make(map[string]string),
-		ServiceAliases: make(map[string]string),
-		TwigExtensions: make(map[string]string),
+		Roots:             []string{"templates"},
+		BundleRoots:       make(map[string][]string),
+		ServiceClasses:    make(map[string]string),
+		ServiceAliases:    make(map[string]string),
+		TwigExtensions:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
 	}
 }
 
@@ -69,6 +71,7 @@ func (c *ContainerConfig) LoadFromXML() {
 	c.ServiceClasses = make(map[string]string)
 	c.ServiceAliases = make(map[string]string)
 	c.TwigExtensions = make(map[string]string)
+	c.ServiceReferences = make(map[string]int)
 
 	var serviceID string
 	var serviceClass string
@@ -106,7 +109,8 @@ func (c *ContainerConfig) LoadFromXML() {
 							isAbstract = a.Value == "true"
 						}
 					}
-					if !isAbstract && id != "" {
+					// A service id does not contain spaces, but sometimes the container xml registers them.
+					if !isAbstract && id != "" && !strings.Contains(id, " ") {
 						serviceID = id
 						if class != "" {
 							c.ServiceClasses[id] = class
@@ -128,6 +132,20 @@ func (c *ContainerConfig) LoadFromXML() {
 				}
 				if name == "twig.extension" && serviceID != "" && serviceClass != "" {
 					c.TwigExtensions[serviceID] = serviceClass
+				}
+			} else if serviceDepth > 0 && local == "argument" {
+				isServiceArg := false
+				serviceIDRef := ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "type" && a.Value == "service" {
+						isServiceArg = true
+					}
+					if a.Name.Local == "id" {
+						serviceIDRef = a.Value
+					}
+				}
+				if isServiceArg && serviceIDRef != "" {
+					c.ServiceReferences[serviceIDRef]++
 				}
 			}
 
