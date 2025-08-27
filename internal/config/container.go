@@ -106,7 +106,7 @@ func (c *ContainerConfig) LoadFromXML() {
 							isAbstract = a.Value == "true"
 						}
 					}
-					if !isAbstract && id != "" && !strings.HasPrefix(id, ".") {
+					if !isAbstract && id != "" {
 						serviceID = id
 						if class != "" {
 							c.ServiceClasses[id] = class

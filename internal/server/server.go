@@ -231,7 +231,7 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 	}
 
 	ok, prefix := doc.HasServicePrefix(p.Position)
-	if !ok || !doc.IsInAutoconfigure(int(p.Position.Line)) {
+	if !ok || (!doc.IsInAutoconfigure(int(p.Position.Line)) && doc.LanguageID != "yaml") {
 		return nil, nil
 	}
 
@@ -240,7 +240,7 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 	kind := protocol.CompletionItemKindKeyword
 
 	for id, class := range s.config.Container.ServiceClasses {
-		if strings.HasPrefix(id, prefix) {
+		if strings.HasPrefix(id, prefix) && !strings.HasPrefix(id, ".") {
 			if _, ok := seen[id]; !ok {
 				item := protocol.CompletionItem{
 					Label:  id,
@@ -254,7 +254,7 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 	}
 
 	for alias, serviceId := range s.config.Container.ServiceAliases {
-		if strings.HasPrefix(alias, prefix) {
+		if strings.HasPrefix(alias, prefix) && !strings.HasPrefix(alias, ".") {
 			if _, ok := seen[alias]; !ok {
 				detail := "alias for " + serviceId
 				item := protocol.CompletionItem{
