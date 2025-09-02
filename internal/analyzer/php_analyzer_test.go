@@ -13,7 +13,7 @@ func TestIsInAutoconfigure(t *testing.T) {
 	require.NoError(t, err)
 
 	analyzer := NewPHPAnalyzer()
-	analyzer.Changed(content)
+	analyzer.Changed(content, nil)
 
 	// Test case 1: Inside autoconfigure
 	pos1 := protocol.Position{Line: 11, Character: 23}
@@ -33,7 +33,7 @@ func BenchmarkIsInAutoconfigure(b *testing.B) {
 	}
 
 	analyzer := NewPHPAnalyzer()
-	analyzer.Changed(content)
+	analyzer.Changed(content, nil)
 	pos := protocol.Position{Line: 11, Character: 23}
 
 	b.ReportAllocs()

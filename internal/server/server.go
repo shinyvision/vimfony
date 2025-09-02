@@ -4,6 +4,7 @@ import (
 	"github.com/shinyvision/vimfony/internal/config"
 	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/shinyvision/vimfony/internal/utils"
+	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/tliron/commonlog"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -131,20 +132,119 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 		return nil
 	}
 
+	uri := p.TextDocument.URI
 	text := doc.Text
-	for _, c := range p.ContentChanges {
-		switch ch := c.(type) {
-		case protocol.TextDocumentContentChangeEventWhole:
-			text = ch.Text
-		case protocol.TextDocumentContentChangeEvent:
-			start := ch.Range.Start.IndexIn(text)
-			end := ch.Range.End.IndexIn(text)
-			if start >= 0 && end >= start && end <= len(text) {
-				text = text[:start] + ch.Text + text[end:]
+	old := []byte(text)
+
+	// UTF-8 bytes
+	pointAt := func(buf []byte, idx int) sitter.Point {
+		var row uint32
+		lineStart := 0
+		// fast scan
+		for i := 0; i < idx && i < len(buf); i++ {
+			if buf[i] == '\n' {
+				row++
+				lineStart = i + 1
 			}
 		}
+		return sitter.Point{Row: row, Column: uint32(idx - lineStart)}
 	}
-	s.state.SetDocument(p.TextDocument.URI, text, doc.LanguageID)
+	rowsAndLastCol := func(bytes []byte) (rows uint32, lastCol uint32) {
+		for i := range bytes {
+			if bytes[i] == '\n' {
+				rows++
+				lastCol = 0
+			} else {
+				lastCol++
+			}
+		}
+		return
+	}
+	pointOfEnd := func(buf []byte) sitter.Point {
+		var row uint32
+		col := 0
+		for i := range buf {
+			if buf[i] == '\n' {
+				row++
+				col = 0
+			} else {
+				col++
+			}
+		}
+		return sitter.Point{Row: row, Column: uint32(col)}
+	}
+
+	// Applying changes
+	for _, raw := range p.ContentChanges {
+		if wholePage, ok := raw.(*protocol.TextDocumentContentChangeEventWhole); ok {
+			newText := wholePage.Text
+			newBytes := []byte(newText)
+
+			change := sitter.EditInput{
+				StartIndex:  0,
+				OldEndIndex: uint32(len(old)),
+				NewEndIndex: uint32(len(newBytes)),
+				StartPoint:  sitter.Point{Row: 0, Column: 0},
+				OldEndPoint: pointOfEnd(old),
+				NewEndPoint: pointOfEnd(newBytes),
+			}
+			s.state.ChangeDocument(uri, newText, &change)
+
+			text, old = newText, newBytes
+			continue
+		}
+
+		// incremental change
+		var changeEvent protocol.TextDocumentContentChangeEvent
+		switch v := raw.(type) {
+		case protocol.TextDocumentContentChangeEvent:
+			changeEvent = v
+		case *protocol.TextDocumentContentChangeEvent:
+			changeEvent = *v
+		default:
+			continue
+		}
+
+		// Convert LSP Range to byte indexes in current text
+		start := changeEvent.Range.Start.IndexIn(text)
+		end := changeEvent.Range.End.IndexIn(text)
+		if start < 0 || end < start || end > len(text) {
+			continue
+		}
+
+		inserted := []byte(changeEvent.Text)
+
+		// Build EditInput from before buffer change
+		startPt := pointAt(old, start)
+		oldEndPt := pointAt(old, end)
+
+		insRows, insLastCol := rowsAndLastCol(inserted)
+		var newEndPt sitter.Point
+		if insRows == 0 {
+			newEndPt = sitter.Point{Row: startPt.Row, Column: startPt.Column + insLastCol}
+		} else {
+			newEndPt = sitter.Point{Row: startPt.Row + insRows, Column: insLastCol}
+		}
+
+		change := sitter.EditInput{
+			StartIndex:  uint32(start),
+			OldEndIndex: uint32(end),
+			NewEndIndex: uint32(start + len(inserted)),
+			StartPoint:  startPt,
+			OldEndPoint: oldEndPt,
+			NewEndPoint: newEndPt,
+		}
+
+		// Apply to text and update state
+		newText := text[:start] + changeEvent.Text + text[end:]
+		s.state.ChangeDocument(uri, newText, &change)
+
+		text = newText
+		old = []byte(newText)
+	}
+
+	// TODO: optimize for incremental changes
+	s.state.SetDocument(uri, text, doc.LanguageID)
 	return nil
 }
 

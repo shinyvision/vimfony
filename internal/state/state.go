@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	sitter "github.com/smacker/go-tree-sitter"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -32,17 +33,30 @@ func (s *State) SetDocument(uri protocol.DocumentUri, text string, languageID st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existingDoc, ok := s.docs[uri]; ok {
+		// We probably never set the document if it already exists, but this doesn't hurt
 		existingDoc.Text = text
 		existingDoc.lines = strings.Split(text, "\n")
 		if existingDoc.Analyzer != nil {
-			existingDoc.Analyzer.Changed([]byte(text))
+			existingDoc.Analyzer.Changed([]byte(text), nil)
 		}
 		return
 	}
 	doc := NewDocument(languageID, text)
 	s.docs[uri] = doc
 	if doc.Analyzer != nil {
-		doc.Analyzer.Changed([]byte(text))
+		doc.Analyzer.Changed([]byte(text), nil)
+	}
+}
+
+func (s *State) ChangeDocument(uri protocol.DocumentUri, text string, change *sitter.EditInput) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existingDoc, ok := s.docs[uri]; ok {
+		existingDoc.Text = text
+		existingDoc.lines = strings.Split(text, "\n")
+		if existingDoc.Analyzer != nil {
+			existingDoc.Analyzer.Changed([]byte(text), change)
+		}
 	}
 }
 

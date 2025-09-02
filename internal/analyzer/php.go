@@ -27,7 +27,12 @@ func NewPHPAnalyzer() Analyzer {
 	p := sitter.NewParser()
 	p.SetLanguage(php.GetLanguage())
 
-	attributeQuery, _ := sitter.NewQuery([]byte(`(attribute) @attr`), php.GetLanguage())
+	// We precompile our regexps + tree-sitter queries. Normally no big deal, but we query often.
+	attributeQuery, _ := sitter.NewQuery([]byte(`
+      (attribute
+        [(qualified_name) (name)] @name
+      ) @attr
+    `), php.GetLanguage())
 	servicesRe := regexp.MustCompile(`['"\\](@?[A-Za-z0-9_.\\-]*)$`)
 
 	return &phpAnalyzer{
@@ -38,23 +43,26 @@ func NewPHPAnalyzer() Analyzer {
 }
 
 // It gets called from the document: code has changed; compute changes incrementally using our old tree
-func (a *phpAnalyzer) Changed(code []byte) error {
+func (a *phpAnalyzer) Changed(code []byte, change *sitter.EditInput) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
 	a.content = code
-	newTree, err := a.parser.ParseCtx(context.Background(), a.tree, code)
-	if a.tree != nil {
-		a.tree.Close()
+	if a.tree != nil && change != nil {
+		a.tree.Edit(*change)
 	}
+	newTree, err := a.parser.ParseCtx(context.Background(), a.tree, code)
 	if err != nil {
-		a.tree = nil
 		return err
+	}
+	if a.tree != nil {
+		a.tree.Close() // Always close old tree
 	}
 	a.tree = newTree
 	return nil
 }
 
+// Document closed: close tree
 func (a *phpAnalyzer) Close() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -93,13 +101,14 @@ func (a *phpAnalyzer) IsInAutoconfigure(pos protocol.Position) (bool, string) {
 			break
 		}
 
-		attrNode := m.Captures[0].Node
-		if attrNode == nil {
-			continue
-		}
-		nameNode := attrNode.Child(0)
-		if nameNode == nil {
-			continue
+		var nameNode, attrNode *sitter.Node
+		for _, c := range m.Captures {
+			switch q.CaptureNameForId(c.Index) {
+			case "name":
+				nameNode = c.Node
+			case "attr":
+				attrNode = c.Node
+			}
 		}
 
 		if shortName(nameNode.Content(a.content)) != "Autoconfigure" {
@@ -115,7 +124,7 @@ func (a *phpAnalyzer) IsInAutoconfigure(pos protocol.Position) (bool, string) {
 			continue
 		}
 		t := node.Type()
-		if t != "string" && t != "string_content" && t != "array_creation_expression" {
+		if t != "string" && t != "string_content" {
 			continue
 		}
 
