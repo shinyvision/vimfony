@@ -1,6 +1,7 @@
 package state
 
 import (
+	"strings"
 	"sync"
 
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -30,13 +31,29 @@ func (s *State) GetDocument(uri protocol.DocumentUri) (*Document, bool) {
 func (s *State) SetDocument(uri protocol.DocumentUri, text string, languageID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.docs[uri] = NewDocument(languageID, text)
+	if existingDoc, ok := s.docs[uri]; ok {
+		existingDoc.Text = text
+		existingDoc.lines = strings.Split(text, "\n")
+		if existingDoc.Analyzer != nil {
+			existingDoc.Analyzer.Changed([]byte(text))
+		}
+		return
+	}
+	doc := NewDocument(languageID, text)
+	s.docs[uri] = doc
+	if doc.Analyzer != nil {
+		doc.Analyzer.Changed([]byte(text))
+	}
 }
 
 // DeleteDocument removes a document from the state.
 func (s *State) DeleteDocument(uri protocol.DocumentUri) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existingDoc, ok := s.docs[uri]; ok {
+		if existingDoc.Analyzer != nil {
+			existingDoc.Analyzer.Close()
+		}
+	}
 	delete(s.docs, uri)
 }
-

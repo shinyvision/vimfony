@@ -7,20 +7,22 @@ This is a language server that adds Symfony integration in Neovim.
 It uses your go-to definition keymapping (`gd` for most vimmers)
 
 If you find a bug or want a feature, you can create an issue or a PR. I’ll probably take a look at it, but no promises.
-If you do create a PR, then please don’t try to implement a PHP parser, because all Go libraries I’ve found seem to be abandoned. For now, we’ll just simply stream files and rely on string matching to get the work done, and it works pretty reliable so far.
+I’m working on getting code parsing to work using tree-sitter. If that’s done, we can have autocomplete for Twig functions!
 
 ## Features
 - `gd` Twig templates with @Bundle support
 - `gd` Twig functions
 - `gd` class from within yaml / xml files
 - `gd` service definitions for example @service_container
-- Autocomplete service names (works in yaml files and autoconfigure php attributes)
+- Autocomplete service names (works in yaml, xml and autoconfigure php attributes)
 
 ## Planned features
 These features are not yet implemented but would be useful:
 (feel free to create a PR if you want to contribute)
 - Autocomplete Twig files
 - Autocomplete route names
+- Autocomplete twig functions
+- Autocomplete form options
 - `gd` Twig components
 - `gd` routes
 - Version checker & updater (`vimfony update`)

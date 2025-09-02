@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/shinyvision/vimfony/internal/analyzer"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -11,14 +12,19 @@ type Document struct {
 	Text       string
 	LanguageID string
 	lines      []string
+	Analyzer   analyzer.Analyzer
 }
 
 func NewDocument(languageId string, content string) *Document {
-	return &Document{
+	doc := &Document{
 		LanguageID: languageId,
 		Text:       content,
 		lines:      strings.Split(content, "\n"),
 	}
+	if languageId == "php" {
+		doc.Analyzer = analyzer.NewPHPAnalyzer()
+	}
+	return doc
 }
 
 func (d *Document) GetLine(i int) (string, bool) {
@@ -49,45 +55,6 @@ func (d *Document) HasServicePrefix(p protocol.Position) (bool, string) {
 	}
 
 	return false, ""
-}
-
-func (d *Document) IsInAutoconfigure(lineNumber int) bool {
-	if d.LanguageID != "php" {
-		return false
-	}
-	lines := strings.Split(d.Text, "\n")
-	if lineNumber >= len(lines) {
-		return false
-	}
-
-	// Search backwards for autoconfigure attribute
-	autoConfigureLineNum := -1
-	for i := lineNumber; i >= 0; i-- {
-		if strings.Contains(lines[i], "#[Autoconfigure") || strings.Contains(lines[i], "Autoconfigure(") {
-			autoConfigureLineNum = i
-			break
-		}
-	}
-
-	if autoConfigureLineNum == -1 {
-		return false // Not in an Autoconfigure block
-	}
-
-	// Search forwards from the Autoconfigure line to find `class `
-	classLineNum := -1
-	for i := autoConfigureLineNum; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "class ") {
-			classLineNum = i
-			break
-		}
-	}
-
-	// The cursor must be between the start and end of the block.
-	if classLineNum != -1 && lineNumber >= classLineNum {
-		return false
-	}
-
-	return true
 }
 
 func (d *Document) IsInXmlServiceTag(pos protocol.Position) (bool, string) {

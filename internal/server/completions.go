@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/shinyvision/vimfony/internal/state"
+	"github.com/shinyvision/vimfony/internal/analyzer"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
@@ -21,11 +21,17 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 	)
 
 	switch doc.LanguageID {
+	// TODO: We'll create an analyzer for each file (including twig). Much more reliable than string matching.
 	case "yaml":
 		found, prefix = doc.HasServicePrefix(p.Position)
 	case "php":
-		if doc.IsInAutoconfigure(int(p.Position.Line)) {
-			found, prefix = doc.HasServicePrefix(p.Position)
+		if doc.Analyzer != nil {
+			if pa, ok := doc.Analyzer.(analyzer.PhpAnalyzer); ok {
+				if f, p := pa.IsInAutoconfigure(p.Position); f && strings.HasPrefix(p, "@") {
+					found = f
+					prefix = strings.TrimPrefix(p, "@")
+				}
+			}
 		}
 	case "xml":
 		found, prefix = doc.IsInXmlServiceTag(p.Position)
@@ -35,14 +41,13 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 		return nil, nil
 	}
 
-	return s.resolveCompletionItems(doc, prefix), nil
+	return s.resolveCompletionItems(prefix), nil
 }
 
-func (s *Server) resolveCompletionItems(doc *state.Document, prefix string) []protocol.CompletionItem {
+func (s *Server) resolveCompletionItems(prefix string) []protocol.CompletionItem {
 	items := []protocol.CompletionItem{}
 	seen := make(map[string]bool)
 	kind := protocol.CompletionItemKindKeyword
-
 	for id, class := range s.config.Container.ServiceClasses {
 		if !strings.HasPrefix(id, ".") && strings.Contains(id, prefix) {
 			if _, ok := seen[id]; !ok {
