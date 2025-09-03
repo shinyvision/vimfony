@@ -34,7 +34,14 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 			}
 		}
 	case "xml":
-		found, prefix = doc.IsInXmlServiceTag(p.Position)
+		if doc.Analyzer != nil {
+			if pa, ok := doc.Analyzer.(analyzer.XmlAnalyzer); ok {
+				if f, p := pa.IsInServiceIDAttribute(p.Position); f {
+					found = f
+					prefix = p
+				}
+			}
+		}
 	}
 
 	if !found {

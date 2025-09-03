@@ -1,0 +1,19 @@
+<?xml version="1.0" ?>
+
+<container xmlns="http://symfony.com/schema/dic/services"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://symfony.com/schema/dic/services http://symfony.com/schema/dic/services/services-1.0.xsd">
+
+        <services>
+            <defaults public="false" />
+
+            <service id="my_service" class="App\MyClass">
+                <argument type="service" id="service_1" />
+                <argument type="service" id="service_2" />
+                <argument type="service" id="service_3" />
+                <argument type="not_a_service" id="not_an_id" />
+                <argument type="something_else" this="has_no_id" />
+                <argument>this is a string</argument>
+            </service>
+        </services>
+</container>

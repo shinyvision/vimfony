@@ -1,6 +1,9 @@
 package server
 
 import (
+	"regexp"
+	"strings"
+
 	"github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/shinyvision/vimfony/internal/twig"
@@ -88,21 +91,27 @@ func (s *Server) resolveServiceId(doc *state.Document, position protocol.Positio
 		}
 		return nil, false
 	}
-
-	if doc.LanguageID == "xml" {
-		serviceID, ok := doc.GetServiceIDFromXMLAt(position)
-		if ok {
-			return findClass(serviceID)
-		}
+	line, ok := doc.GetLine(int(position.Line))
+	size := len(line)
+	if !ok {
+		return nil, false
 	}
-
-	if doc.LanguageID == "yaml" {
-		serviceID, ok := doc.GetServiceIDFromYAMLAt(position)
-		if ok {
-			return findClass(serviceID)
+	serviceChar := regexp.MustCompile(`[a-zA-Z0-9_.-\\]`)
+	left := 0
+	right := 0
+	for {
+		if int(position.Character)-left == 0 || !serviceChar.Match([]byte{line[int(position.Character)-left-1]}) {
+			break
 		}
+		left++
 	}
-
-	return nil, false
+	for {
+		if int(position.Character)+right == size || !serviceChar.Match([]byte{line[int(position.Character)+right]}) {
+			break
+		}
+		right++
+	}
+	serviceID := line[int(position.Character)-left : int(position.Character)+right]
+	serviceID = strings.TrimPrefix(serviceID, "@")
+	return findClass(serviceID)
 }
-

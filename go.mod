@@ -9,6 +9,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/tliron/commonlog v0.2.20
 	github.com/tliron/glsp v0.2.2
+	github.com/tree-sitter-grammars/tree-sitter-xml v0.7.0
 )
 
 require (

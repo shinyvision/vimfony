@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"bytes"
 	"unicode/utf8"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -84,4 +85,28 @@ func linePrefixAtPoint(content []byte, point sitter.Point) []byte {
 	}
 	caret := min(start+int(point.Column), len(content))
 	return content[start:caret]
+}
+
+func lspPosToByteOffset(content []byte, pos protocol.Position) int {
+	lines := bytes.Split(content, []byte("\n"))
+	if int(pos.Line) >= len(lines) {
+		return -1
+	}
+	offset := 0
+	for i := 0; i < int(pos.Line); i++ {
+		offset += len(lines[i]) + 1 // +1 for the newline
+	}
+
+	char := int(pos.Character)
+	lineLen := len(lines[int(pos.Line)])
+	if char > lineLen {
+		char = lineLen
+	}
+
+	offset += char
+
+	if offset > len(content) {
+		return -1
+	}
+	return offset
 }
