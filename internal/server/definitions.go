@@ -1,9 +1,6 @@
 package server
 
 import (
-	"regexp"
-	"strings"
-
 	"github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/shinyvision/vimfony/internal/twig"
@@ -96,22 +93,27 @@ func (s *Server) resolveServiceId(doc *state.Document, position protocol.Positio
 	if !ok {
 		return nil, false
 	}
-	serviceChar := regexp.MustCompile(`[a-zA-Z0-9_.-\\]`)
+	isServiceChar := func(b byte) bool {
+		return (b >= 'a' && b <= 'z') ||
+			(b >= 'A' && b <= 'Z') ||
+			(b >= '0' && b <= '9') ||
+			b == '_' || b == '.' || b == '-' || b == '\\'
+	}
 	left := 0
 	right := 0
+	offset := int(position.Character)
 	for {
-		if int(position.Character)-left == 0 || !serviceChar.Match([]byte{line[int(position.Character)-left-1]}) {
+		if offset-left == 0 || !isServiceChar(line[offset-left-1]) {
 			break
 		}
 		left++
 	}
 	for {
-		if int(position.Character)+right == size || !serviceChar.Match([]byte{line[int(position.Character)+right]}) {
+		if offset+right == size || !isServiceChar(line[offset+right]) {
 			break
 		}
 		right++
 	}
-	serviceID := line[int(position.Character)-left : int(position.Character)+right]
-	serviceID = strings.TrimPrefix(serviceID, "@")
+	serviceID := line[offset-left : offset+right]
 	return findClass(serviceID)
 }
