@@ -15,22 +15,20 @@ I’m working on getting code parsing to work using tree-sitter. If that’s don
 - `gd` class from within yaml / xml files
 - `gd` service definitions for example @service_container
 - Autocomplete service names (works in yaml, xml and autoconfigure php attributes)
+- Autocomplete twig functions
 
 ## Planned features
 These features are not yet implemented but would be useful:
 (feel free to create a PR if you want to contribute)
 - Autocomplete Twig files
 - Autocomplete route names
-- Autocomplete twig functions
 - Autocomplete form options
 - `gd` Twig components
 - `gd` routes
 - Version checker & updater (`vimfony update`)
 
 ### Coming up
-You can get these features if you build from source:
-- Support for autocompleting service ids in XML
-- `gd` service definitions in XML files
+Main should be up-to-date with the latest release, so you’re good to go.
 
 ## How to use
 You can download a release for your OS and CPU or build from source:
