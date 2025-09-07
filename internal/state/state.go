@@ -4,7 +4,7 @@ import (
 	"strings"
 	"sync"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -48,7 +48,7 @@ func (s *State) SetDocument(uri protocol.DocumentUri, text string, languageID st
 	}
 }
 
-func (s *State) ChangeDocument(uri protocol.DocumentUri, text string, change *sitter.EditInput) {
+func (s *State) ChangeDocument(uri protocol.DocumentUri, text string, change *sitter.InputEdit) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existingDoc, ok := s.docs[uri]; ok {

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"unicode/utf8"
 
-	sitter "github.com/smacker/go-tree-sitter"
+	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -37,10 +37,10 @@ func caretIn(n *sitter.Node, pt sitter.Point) bool {
 
 // UTF-16 conversion from bytes to point
 func lspPosToPoint(pos protocol.Position, content []byte) (sitter.Point, bool) {
-	row := uint32(pos.Line)
+	row := uint(pos.Line)
 
-	var lineStart, i, curRow uint32
-	for i = 0; i < uint32(len(content)) && curRow < row; i++ {
+	var lineStart, i, curRow uint
+	for i = 0; i < uint(len(content)) && curRow < row; i++ {
 		if content[i] == '\n' {
 			curRow++
 			lineStart = i + 1
@@ -51,8 +51,8 @@ func lspPosToPoint(pos protocol.Position, content []byte) (sitter.Point, bool) {
 	}
 
 	need := pos.Character
-	var colBytes uint32
-	for offset := lineStart; offset < uint32(len(content)); {
+	var colBytes uint
+	for offset := lineStart; offset < uint(len(content)); {
 		b := content[offset]
 		if b == '\n' || b == '\r' {
 			break
@@ -67,7 +67,7 @@ func lspPosToPoint(pos protocol.Position, content []byte) (sitter.Point, bool) {
 			return sitter.Point{Row: row, Column: colBytes}, true
 		}
 		need -= u16len
-		offset += uint32(size)
+		offset += uint(size)
 		colBytes = offset - lineStart
 	}
 	return sitter.Point{Row: row, Column: colBytes}, true

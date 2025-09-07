@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"sync"
 
-	sitter "github.com/smacker/go-tree-sitter"
-	"github.com/smacker/go-tree-sitter/php"
+	php "github.com/alexaandru/go-sitter-forest/php"
+	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -25,16 +25,14 @@ type phpAnalyzer struct {
 
 func NewPHPAnalyzer() Analyzer {
 	p := sitter.NewParser()
-	p.SetLanguage(php.GetLanguage())
-
-	// We precompile our regexps + tree-sitter queries. Normally no big deal, but we query often.
-	attributeQuery, _ := sitter.NewQuery([]byte(`
+	lang := sitter.NewLanguage(php.GetLanguage())
+	_ = p.SetLanguage(lang)
+	attributeQuery, _ := sitter.NewQuery(lang, []byte(`
       (attribute
         [(qualified_name) (name)] @name
       ) @attr
-    `), php.GetLanguage())
+    `))
 	servicesRe := regexp.MustCompile(`['"\\](@?[A-Za-z0-9_.\\-]*)$`)
-
 	return &phpAnalyzer{
 		parser:         p,
 		attributeQuery: attributeQuery,
@@ -42,8 +40,7 @@ func NewPHPAnalyzer() Analyzer {
 	}
 }
 
-// It gets called from the document: code has changed; compute changes incrementally using our old tree
-func (a *phpAnalyzer) Changed(code []byte, change *sitter.EditInput) error {
+func (a *phpAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -51,18 +48,17 @@ func (a *phpAnalyzer) Changed(code []byte, change *sitter.EditInput) error {
 	if a.tree != nil && change != nil {
 		a.tree.Edit(*change)
 	}
-	newTree, err := a.parser.ParseCtx(context.Background(), a.tree, code)
+	newTree, err := a.parser.ParseString(context.Background(), a.tree, code)
 	if err != nil {
 		return err
 	}
 	if a.tree != nil {
-		a.tree.Close() // Always close old tree
+		a.tree.Close()
 	}
 	a.tree = newTree
 	return nil
 }
 
-// Document closed: close tree
 func (a *phpAnalyzer) Close() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -72,55 +68,51 @@ func (a *phpAnalyzer) Close() {
 	}
 }
 
-// We check using the tree-sitter if we are in an #[Autoconfigure] attribute
 func (a *phpAnalyzer) IsInAutoconfigure(pos protocol.Position) (bool, string) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if a.tree == nil {
-		return false, "" // No tree, no analyze
-	}
-
-	root := a.tree.RootNode()
-	q := a.attributeQuery
-	if q == nil {
+	if a.tree == nil || a.attributeQuery == nil {
 		return false, ""
 	}
-
-	qc := sitter.NewQueryCursor()
-	defer qc.Close()
-	qc.Exec(q, root)
 
 	point, ok := lspPosToPoint(pos, a.content)
 	if !ok {
 		return false, ""
 	}
 
+	root := a.tree.RootNode()
+	q := a.attributeQuery
+	qc := sitter.NewQueryCursor()
+	it := qc.Matches(q, root, a.content)
+
 	for {
-		m, ok := qc.NextMatch()
-		if !ok {
+		m := it.Next()
+		if m == nil {
 			break
 		}
 
 		var nameNode, attrNode *sitter.Node
 		for _, c := range m.Captures {
-			switch q.CaptureNameForId(c.Index) {
+			switch q.CaptureNameForID(c.Index) {
 			case "name":
-				nameNode = c.Node
+				nameNode = &c.Node
 			case "attr":
-				attrNode = c.Node
+				attrNode = &c.Node
 			}
 		}
-
+		if nameNode == nil || attrNode == nil {
+			continue
+		}
 		if shortName(nameNode.Content(a.content)) != "Autoconfigure" {
 			continue
 		}
-
-		if !(attrNode.StartPoint().Row <= point.Row && point.Row <= attrNode.EndPoint().Row) {
+		sp, ep := attrNode.StartPoint(), attrNode.EndPoint()
+		if !(sp.Row <= point.Row && point.Row <= ep.Row) {
 			continue
 		}
 
 		node := root.NamedDescendantForPointRange(point, point)
-		if node == nil {
+		if node.IsNull() {
 			continue
 		}
 		t := node.Type()

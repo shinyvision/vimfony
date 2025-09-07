@@ -1,10 +1,10 @@
 package server
 
 import (
+	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
 	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/shinyvision/vimfony/internal/utils"
-	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/tliron/commonlog"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -138,7 +138,7 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 
 	// UTF-8 bytes
 	pointAt := func(buf []byte, idx int) sitter.Point {
-		var row uint32
+		var row uint
 		lineStart := 0
 		// fast scan
 		for i := 0; i < idx && i < len(buf); i++ {
@@ -147,9 +147,9 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 				lineStart = i + 1
 			}
 		}
-		return sitter.Point{Row: row, Column: uint32(idx - lineStart)}
+		return sitter.Point{Row: row, Column: uint(idx - lineStart)}
 	}
-	rowsAndLastCol := func(bytes []byte) (rows uint32, lastCol uint32) {
+	rowsAndLastCol := func(bytes []byte) (rows uint, lastCol uint) {
 		for i := range bytes {
 			if bytes[i] == '\n' {
 				rows++
@@ -161,7 +161,7 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 		return
 	}
 	pointOfEnd := func(buf []byte) sitter.Point {
-		var row uint32
+		var row uint
 		col := 0
 		for i := range buf {
 			if buf[i] == '\n' {
@@ -171,7 +171,7 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 				col++
 			}
 		}
-		return sitter.Point{Row: row, Column: uint32(col)}
+		return sitter.Point{Row: row, Column: uint(col)}
 	}
 
 	// Applying changes
@@ -180,10 +180,10 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 			newText := wholePage.Text
 			newBytes := []byte(newText)
 
-			change := sitter.EditInput{
+			change := sitter.InputEdit{
 				StartIndex:  0,
-				OldEndIndex: uint32(len(old)),
-				NewEndIndex: uint32(len(newBytes)),
+				OldEndIndex: uint(len(old)),
+				NewEndIndex: uint(len(newBytes)),
 				StartPoint:  sitter.Point{Row: 0, Column: 0},
 				OldEndPoint: pointOfEnd(old),
 				NewEndPoint: pointOfEnd(newBytes),
@@ -226,10 +226,10 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 			newEndPt = sitter.Point{Row: startPt.Row + insRows, Column: insLastCol}
 		}
 
-		change := sitter.EditInput{
-			StartIndex:  uint32(start),
-			OldEndIndex: uint32(end),
-			NewEndIndex: uint32(start + len(inserted)),
+		change := sitter.InputEdit{
+			StartIndex:  uint(start),
+			OldEndIndex: uint(end),
+			NewEndIndex: uint(start + len(inserted)),
 			StartPoint:  startPt,
 			OldEndPoint: oldEndPt,
 			NewEndPoint: newEndPt,
