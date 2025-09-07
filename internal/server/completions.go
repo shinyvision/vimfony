@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -56,8 +57,26 @@ func (s *Server) onTwigFunctionCompletions(doc *state.Document, p *protocol.Comp
 }
 
 func (s *Server) twigFunctionCompletionItems(prefix string) []protocol.CompletionItem {
+	items := []protocol.CompletionItem{}
+	kind := protocol.CompletionItemKindFunction
 
-	return nil
+	for name := range s.config.Container.TwigFunctions {
+		if strings.HasPrefix(name, prefix) {
+			detail := fmt.Sprintf("%s twig function", name)
+			item := protocol.CompletionItem{
+				Label:  name,
+				Kind:   &kind,
+				Detail: &detail,
+			}
+			items = append(items, item)
+		}
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Label < items[j].Label
+	})
+
+	return items
 }
 
 func (s *Server) onServiceCompletions(doc *state.Document, p *protocol.CompletionParams) []protocol.CompletionItem {
