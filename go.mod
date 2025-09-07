@@ -6,6 +6,7 @@ toolchain go1.24.6
 
 require (
 	github.com/alexaandru/go-sitter-forest/php v1.9.5
+	github.com/alexaandru/go-sitter-forest/twig v1.9.0
 	github.com/alexaandru/go-sitter-forest/xml v1.9.5
 	github.com/alexaandru/go-tree-sitter-bare v1.11.0
 	github.com/stretchr/testify v1.10.0

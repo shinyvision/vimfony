@@ -26,6 +26,8 @@ func NewDocument(languageId string, content string) *Document {
 		doc.Analyzer = analyzer.NewPHPAnalyzer()
 	case "xml":
 		doc.Analyzer = analyzer.NewXMLAnalyzer()
+	case "twig":
+		doc.Analyzer = analyzer.NewTwigAnalyzer()
 	}
 	return doc
 }

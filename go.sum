@@ -1,5 +1,7 @@
 github.com/alexaandru/go-sitter-forest/php v1.9.5 h1:t8FV0CrjobKKk941AJ5EZrLOeY6am25x/NR6iZx8emk=
 github.com/alexaandru/go-sitter-forest/php v1.9.5/go.mod h1:LY33+NVll5+uKJ9YQiAFy/QcX02EHWlDlL/PPqAAjzg=
+github.com/alexaandru/go-sitter-forest/twig v1.9.0 h1:bpe93PWhhKY2mFAWc1AdXWNwpjsQQwSg3JnFZCJ41Pc=
+github.com/alexaandru/go-sitter-forest/twig v1.9.0/go.mod h1:areyx7A8qrc8FKLT5Bhvi2C/QvXax2iOO08WD857tU4=
 github.com/alexaandru/go-sitter-forest/xml v1.9.5 h1:UDBFoZT3DQumVS1efhZ404XwfpFPsSe7wRxtw9PIfUk=
 github.com/alexaandru/go-sitter-forest/xml v1.9.5/go.mod h1:TvEoqrlPhY7TtDU8ihNhEBTmA4rgL2jw7loSANCKhbI=
 github.com/alexaandru/go-tree-sitter-bare v1.11.0 h1:hRg0R09Kukx2il7ZEec570L/zG4SlM9VwEYR7kkh2nY=

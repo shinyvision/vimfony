@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/shinyvision/vimfony/internal/analyzer"
+	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
@@ -15,6 +16,51 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 		return nil, nil
 	}
 
+	serviceCompletions := s.onServiceCompletions(doc, p)
+	if len(serviceCompletions) > 0 {
+		return serviceCompletions, nil
+	}
+
+	twigFunctionCompletions := s.onTwigFunctionCompletions(doc, p)
+	if len(twigFunctionCompletions) > 0 {
+		return twigFunctionCompletions, nil
+	}
+
+	return nil, nil
+}
+
+func (s *Server) onTwigFunctionCompletions(doc *state.Document, p *protocol.CompletionParams) []protocol.CompletionItem {
+	if doc.LanguageID != "twig" {
+		return nil
+	}
+
+	var (
+		found  bool
+		prefix string
+	)
+
+	if doc.Analyzer != nil {
+		if ta, ok := doc.Analyzer.(analyzer.TwigAnalyzer); ok {
+			if f, p := ta.IsTypingFunction(p.Position); f {
+				found = f
+				prefix = p
+			}
+		}
+	}
+
+	if !found {
+		return nil
+	}
+
+	return s.twigFunctionCompletionItems(prefix)
+}
+
+func (s *Server) twigFunctionCompletionItems(prefix string) []protocol.CompletionItem {
+
+	return nil
+}
+
+func (s *Server) onServiceCompletions(doc *state.Document, p *protocol.CompletionParams) []protocol.CompletionItem {
 	var (
 		found  bool
 		prefix string
@@ -43,15 +89,14 @@ func (s *Server) onCompletion(_ *glsp.Context, p *protocol.CompletionParams) (an
 			}
 		}
 	}
-
 	if !found {
-		return nil, nil
+		return nil
 	}
 
-	return s.resolveCompletionItems(prefix), nil
+	return s.serviceCompletionItems(prefix)
 }
 
-func (s *Server) resolveCompletionItems(prefix string) []protocol.CompletionItem {
+func (s *Server) serviceCompletionItems(prefix string) []protocol.CompletionItem {
 	items := []protocol.CompletionItem{}
 	seen := make(map[string]bool)
 	kind := protocol.CompletionItemKindKeyword
