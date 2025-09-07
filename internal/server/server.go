@@ -100,8 +100,8 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 		}
 	}
 
-	s.config.Container.LoadFromXML()
 	s.config.LoadPsr4Map()
+	s.config.Container.LoadFromXML(s.config.Psr4)
 
 	logPathStats(s.config, "initialize")
 

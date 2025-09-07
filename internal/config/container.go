@@ -1,13 +1,17 @@
 package config
 
 import (
+	"bufio"
 	"encoding/xml"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/tliron/commonlog"
+	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
 type ContainerConfig struct {
@@ -17,7 +21,7 @@ type ContainerConfig struct {
 	BundleRoots       map[string][]string
 	ServiceClasses    map[string]string
 	ServiceAliases    map[string]string
-	TwigExtensions    map[string]string
+	TwigFunctions     map[string]protocol.Location
 	ServiceReferences map[string]int
 }
 
@@ -27,13 +31,13 @@ func NewContainerConfig() *ContainerConfig {
 		BundleRoots:       make(map[string][]string),
 		ServiceClasses:    make(map[string]string),
 		ServiceAliases:    make(map[string]string),
-		TwigExtensions:    make(map[string]string),
+		TwigFunctions:     make(map[string]protocol.Location),
 		ServiceReferences: make(map[string]int),
 	}
 }
 
 // Populates the Config.
-func (c *ContainerConfig) LoadFromXML() {
+func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 	logger := commonlog.GetLoggerf("vimfony.config")
 	if c.ContainerXMLPath == "" {
 		return
@@ -70,7 +74,6 @@ func (c *ContainerConfig) LoadFromXML() {
 
 	c.ServiceClasses = make(map[string]string)
 	c.ServiceAliases = make(map[string]string)
-	c.TwigExtensions = make(map[string]string)
 	c.ServiceReferences = make(map[string]int)
 
 	var serviceID string
@@ -131,7 +134,7 @@ func (c *ContainerConfig) LoadFromXML() {
 					}
 				}
 				if name == "twig.extension" && serviceID != "" && serviceClass != "" {
-					c.TwigExtensions[serviceID] = serviceClass
+					c.indexTwigFunctions(serviceClass, psr4Map)
 				}
 			} else if serviceDepth > 0 && local == "argument" {
 				isServiceArg := false
@@ -256,6 +259,66 @@ func (c *ContainerConfig) LoadFromXML() {
 		"container_xml_path: loaded %d bare roots and %d bundle paths across %d bundles from XML",
 		addedBare, addedBundle, len(bundlesTouched),
 	)
+}
+
+func (c *ContainerConfig) indexTwigFunctions(class string, psr4Map Psr4Map) {
+	logger := commonlog.GetLoggerf("vimfony.config")
+	path, ok := Psr4Resolve(class, psr4Map, c.WorkspaceRoot)
+	if !ok {
+		return
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	type state int
+	const (
+		SearchingForGetFunctions state = iota
+		InGetFunctions
+	)
+
+	currentState := SearchingForGetFunctions
+	braceLevel := 0
+	lineNumber := 0
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		switch currentState {
+		case SearchingForGetFunctions:
+			if strings.Contains(line, "public function getFunctions()") {
+				currentState = InGetFunctions
+				braceLevel += strings.Count(line, "{")
+				braceLevel -= strings.Count(line, "}")
+			}
+		case InGetFunctions:
+			braceLevel += strings.Count(line, "{")
+			braceLevel -= strings.Count(line, "}")
+			if braceLevel <= 0 {
+				return
+			}
+			re := regexp.MustCompile(`new\s+TwigFunction\s*\(\s*['"]([^'"]+)['"]`)
+			matches := re.FindAllStringSubmatchIndex(line, -1)
+			for _, match := range matches {
+				if len(match) >= 4 {
+					functionName := line[match[2]:match[3]]
+					startCol := utf8.RuneCountInString(line[:match[2]])
+					endCol := startCol + utf8.RuneCountInString(functionName)
+					locRange := protocol.Range{
+						Start: protocol.Position{Line: uint32(lineNumber), Character: uint32(startCol)},
+						End:   protocol.Position{Line: uint32(lineNumber), Character: uint32(endCol)},
+					}
+					c.TwigFunctions[functionName] = protocol.Location{URI: "file://" + path, Range: locRange}
+					logger.Debugf("indexed twig function '%s' at %s:%d", functionName, path, lineNumber+1)
+				}
+			}
+		}
+		lineNumber++
+	}
 }
 
 // Resolves a service ID to its class name.

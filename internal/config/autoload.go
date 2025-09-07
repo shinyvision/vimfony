@@ -3,8 +3,10 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 type Psr4Map map[string][]string
@@ -28,4 +30,27 @@ func GetPsr4Map(autoloadFile, phpPath string) (Psr4Map, error) {
 	}
 
 	return psr4Map, nil
+}
+
+func Psr4Resolve(className string, psr4Map Psr4Map, workspaceRoot string) (string, bool) {
+	for namespace, paths := range psr4Map {
+		if strings.HasPrefix(className, namespace) {
+			for _, path := range paths {
+				relPath := strings.Replace(className, namespace, "", 1)
+				relPath = strings.ReplaceAll(relPath, "\\", string(filepath.Separator)) + ".php"
+
+				absPath := path
+				if !filepath.IsAbs(absPath) {
+					absPath = filepath.Join(workspaceRoot, path)
+				}
+
+				cand := filepath.Join(absPath, relPath)
+				if info, err := os.Stat(cand); err == nil && !info.IsDir() {
+					return cand, true
+				}
+			}
+		}
+	}
+
+	return "", false
 }
