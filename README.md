@@ -28,7 +28,8 @@ These features are not yet implemented but would be useful:
 - Version checker & updater (`vimfony update`)
 
 ### Coming up
-Main should be up-to-date with the latest release, so you’re good to go.
+You can get these features if you build from source:
+- Autocomplete Twig variables
 
 ## How to use
 You can download a release for your OS and CPU or build from source:
