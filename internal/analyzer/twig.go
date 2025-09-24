@@ -13,29 +13,45 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-type TwigAnalyzer interface {
-	ContainerAware
-	IsTypingFunction(pos protocol.Position) (bool, string)
-}
-
 type twigAnalyzer struct {
-	parser     *sitter.Parser
-	mu         sync.RWMutex
-	tree       *sitter.Tree
-	content    []byte
-	identQuery *sitter.Query
-	container  *config.ContainerConfig
+	parser            *sitter.Parser
+	mu                sync.RWMutex
+	tree              *sitter.Tree
+	content           []byte
+	functionLikeQuery *sitter.Query
+	variableLikeQuery *sitter.Query
+	assignmentQuery   *sitter.Query
+	container         *config.ContainerConfig
 }
 
 func NewTwigAnalyzer() Analyzer {
 	p := sitter.NewParser()
 	lang := sitter.NewLanguage(twig.GetLanguage())
 	_ = p.SetLanguage(lang)
-	q, _ := sitter.NewQuery(lang, []byte(`
-	  (variable) @ident
-	  (function_identifier) @ident
+
+	functionLikeQuery, _ := sitter.NewQuery(lang, []byte(`
+	  (variable) @functionLike
+	  (function_identifier) @functionLike
 	`))
-	return &twigAnalyzer{parser: p, identQuery: q}
+
+	variableLikeQuery, _ := sitter.NewQuery(lang, []byte(`
+	  (variable) @variableLike
+	`))
+
+	assignmentQuery, _ := sitter.NewQuery(lang, []byte(`
+	  (assignment_statement
+	    (keyword) @keyword (#eq? @keyword "set")
+	    (variable) @assignedVariable
+	    (variable) @assignedValue
+	  )
+	`))
+
+	return &twigAnalyzer{
+		parser:            p,
+		functionLikeQuery: functionLikeQuery,
+		variableLikeQuery: variableLikeQuery,
+		assignmentQuery:   assignmentQuery,
+	}
 }
 
 func (a *twigAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
@@ -66,11 +82,11 @@ func (a *twigAnalyzer) Close() {
 	}
 }
 
-// IsTypingFunction checks if we're typing a function identifier or a variable since TS twig variables kinda look like functions
-func (a *twigAnalyzer) IsTypingFunction(pos protocol.Position) (bool, string) {
+// isTypingFunction checks if we're typing a function identifier or a variable since TS twig variables kinda look like functions
+func (a *twigAnalyzer) isTypingFunction(pos protocol.Position) (bool, string) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if a.tree == nil || a.identQuery == nil {
+	if a.tree == nil || a.functionLikeQuery == nil {
 		return false, ""
 	}
 
@@ -81,7 +97,7 @@ func (a *twigAnalyzer) IsTypingFunction(pos protocol.Position) (bool, string) {
 
 	root := a.tree.RootNode()
 	qc := sitter.NewQueryCursor()
-	it := qc.Matches(a.identQuery, root, a.content)
+	it := qc.Matches(a.functionLikeQuery, root, a.content)
 
 	for {
 		m := it.Next()
@@ -89,7 +105,7 @@ func (a *twigAnalyzer) IsTypingFunction(pos protocol.Position) (bool, string) {
 			break
 		}
 		for _, cap := range m.Captures {
-			if a.identQuery.CaptureNameForID(cap.Index) != "ident" {
+			if a.functionLikeQuery.CaptureNameForID(cap.Index) != "functionLike" {
 				continue
 			}
 			n := cap.Node
@@ -102,6 +118,53 @@ func (a *twigAnalyzer) IsTypingFunction(pos protocol.Position) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+func (a *twigAnalyzer) isTypingVariable(pos protocol.Position) (bool, string) {
+	return a.isTypingFunction(pos) // Variables and functions use the same detection logic in Twig
+}
+
+// getDefinedVariables extracts all variables defined in the current template using {% set %} statements
+func (a *twigAnalyzer) getDefinedVariables() map[string]string {
+	if a.tree == nil || a.assignmentQuery == nil {
+		return nil
+	}
+
+	variables := make(map[string]string)
+
+	root := a.tree.RootNode()
+	qc := sitter.NewQueryCursor()
+	it := qc.Matches(a.assignmentQuery, root, a.content)
+
+	for {
+		m := it.Next()
+		if m == nil {
+			break
+		}
+
+		var variableName, assignedValue string
+		for _, cap := range m.Captures {
+			captureName := a.assignmentQuery.CaptureNameForID(cap.Index)
+			n := cap.Node
+			start := int(n.StartByte())
+			end := int(n.EndByte())
+
+			if start >= 0 && end <= len(a.content) {
+				content := strings.TrimSpace(string(a.content[start:end]))
+				if captureName == "assignedVariable" {
+					variableName = content
+				} else if captureName == "assignedValue" {
+					assignedValue = content
+				}
+			}
+		}
+
+		if variableName != "" && assignedValue != "" {
+			variables[variableName] = assignedValue
+		}
+	}
+
+	return variables
 }
 
 func (a *twigAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
@@ -118,12 +181,32 @@ func (a *twigAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completio
 		return nil, nil
 	}
 
-	found, prefix := a.IsTypingFunction(pos)
-	if !found {
+	var items []protocol.CompletionItem
+
+	if foundFunction, functionPrefix := a.isTypingFunction(pos); foundFunction {
+		functionItems := a.twigFunctionCompletionItems(functionPrefix)
+		items = append(items, functionItems...)
+	}
+
+	if foundVariable, variablePrefix := a.isTypingVariable(pos); foundVariable {
+		variableItems := a.twigVariableCompletionItems(variablePrefix)
+		items = append(items, variableItems...)
+	}
+
+	if len(items) == 0 {
 		return nil, nil
 	}
 
-	return a.twigFunctionCompletionItems(prefix), nil
+	sort.Slice(items, func(i, j int) bool {
+		labelI := items[i].Label
+		labelJ := items[j].Label
+		if len(labelI) != len(labelJ) {
+			return len(labelI) < len(labelJ)
+		}
+		return labelI < labelJ
+	})
+
+	return items, nil
 }
 
 func (a *twigAnalyzer) twigFunctionCompletionItems(prefix string) []protocol.CompletionItem {
@@ -145,6 +228,27 @@ func (a *twigAnalyzer) twigFunctionCompletionItems(prefix string) []protocol.Com
 	sort.Slice(items, func(i, j int) bool {
 		return items[i].Label < items[j].Label
 	})
+
+	return items
+}
+
+func (a *twigAnalyzer) twigVariableCompletionItems(prefix string) []protocol.CompletionItem {
+	items := []protocol.CompletionItem{}
+	kind := protocol.CompletionItemKindVariable
+
+	definedVariables := a.getDefinedVariables()
+
+	for variable, value := range definedVariables {
+		if strings.HasPrefix(variable, prefix) {
+			detail := fmt.Sprintf("{%% set %s = %s %%}", variable, value)
+			item := protocol.CompletionItem{
+				Label:  variable,
+				Kind:   &kind,
+				Detail: &detail,
+			}
+			items = append(items, item)
+		}
+	}
 
 	return items
 }

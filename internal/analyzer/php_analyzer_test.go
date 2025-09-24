@@ -17,12 +17,12 @@ func TestIsInAutoconfigure(t *testing.T) {
 
 	// Test case 1: Inside autoconfigure
 	pos1 := protocol.Position{Line: 11, Character: 23}
-	found1, msg1 := analyzer.(PhpAnalyzer).IsInAutoconfigure(pos1)
+	found1, msg1 := analyzer.(*phpAnalyzer).isInAutoconfigure(pos1)
 	require.True(t, found1, "Test case 1 failed: %s", msg1)
 
 	// Test case 2: Outside autoconfigure
 	pos2 := protocol.Position{Line: 20, Character: 14}
-	found2, _ := analyzer.(PhpAnalyzer).IsInAutoconfigure(pos2)
+	found2, _ := analyzer.(*phpAnalyzer).isInAutoconfigure(pos2)
 	require.False(t, found2)
 }
 
@@ -39,6 +39,6 @@ func BenchmarkIsInAutoconfigure(b *testing.B) {
 	b.ReportAllocs()
 
 	for b.Loop() {
-		_, _ = analyzer.(PhpAnalyzer).IsInAutoconfigure(pos)
+		_, _ = analyzer.(*phpAnalyzer).isInAutoconfigure(pos)
 	}
 }

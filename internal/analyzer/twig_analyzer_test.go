@@ -50,7 +50,7 @@ func TestIsTypingFunction(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			found, prefix := analyzer.IsTypingFunction(tc.pos)
+			found, prefix := analyzer.isTypingFunction(tc.pos)
 			assert.Equal(t, tc.expectedFound, found)
 			assert.Equal(t, tc.expectedPrefix, prefix)
 		})

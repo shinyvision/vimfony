@@ -15,10 +15,6 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-type XmlAnalyzer interface {
-	ContainerAware
-	IsInServiceIDAttribute(pos protocol.Position) (bool, string)
-}
 
 type xmlAnalyzer struct {
 	parser    *sitter.Parser
@@ -62,7 +58,7 @@ func (a *xmlAnalyzer) Close() {
 	}
 }
 
-func (a *xmlAnalyzer) IsInServiceIDAttribute(pos protocol.Position) (bool, string) {
+func (a *xmlAnalyzer) isInServiceIDAttribute(pos protocol.Position) (bool, string) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
@@ -286,7 +282,7 @@ func (a *xmlAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 		return nil, nil
 	}
 
-	found, prefix := a.IsInServiceIDAttribute(pos)
+	found, prefix := a.isInServiceIDAttribute(pos)
 	if !found {
 		return nil, nil
 	}

@@ -56,7 +56,7 @@ func TestIsInServiceIDAttribute(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			found, prefix := analyzer.IsInServiceIDAttribute(tc.pos)
+			found, prefix := analyzer.isInServiceIDAttribute(tc.pos)
 			assert.Equal(t, tc.expectedFound, found)
 			assert.Equal(t, tc.expectedPrefix, prefix)
 		})

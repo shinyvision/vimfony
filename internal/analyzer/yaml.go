@@ -10,10 +10,6 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-type YamlAnalyzer interface {
-	ContainerAware
-	HasServicePrefix(pos protocol.Position) (bool, string)
-}
 
 type yamlAnalyzer struct {
 	content   []byte
@@ -39,9 +35,6 @@ func (a *yamlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *yamlAnalyzer) HasServicePrefix(pos protocol.Position) (bool, string) {
-	return a.hasServicePrefix(pos)
-}
 
 func (a *yamlAnalyzer) hasServicePrefix(pos protocol.Position) (bool, string) {
 	if int(pos.Line) >= len(a.lines) {

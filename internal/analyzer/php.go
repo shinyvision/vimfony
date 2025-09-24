@@ -13,10 +13,6 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-type PhpAnalyzer interface {
-	ContainerAware
-	IsInAutoconfigure(pos protocol.Position) (bool, string)
-}
 
 type phpAnalyzer struct {
 	parser         *sitter.Parser
@@ -73,7 +69,7 @@ func (a *phpAnalyzer) Close() {
 	}
 }
 
-func (a *phpAnalyzer) IsInAutoconfigure(pos protocol.Position) (bool, string) {
+func (a *phpAnalyzer) isInAutoconfigure(pos protocol.Position) (bool, string) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.tree == nil || a.attributeQuery == nil {
@@ -149,7 +145,7 @@ func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 		return nil, nil
 	}
 
-	found, prefix := a.IsInAutoconfigure(pos)
+	found, prefix := a.isInAutoconfigure(pos)
 	if !found {
 		return nil, nil
 	}
