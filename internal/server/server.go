@@ -2,6 +2,7 @@ package server
 
 import (
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
+	"github.com/shinyvision/vimfony/internal/analyzer"
 	"github.com/shinyvision/vimfony/internal/config"
 	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/shinyvision/vimfony/internal/utils"
@@ -123,6 +124,16 @@ func (s *Server) setTrace(_ *glsp.Context, p *protocol.SetTraceParams) error {
 
 func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams) error {
 	s.state.SetDocument(p.TextDocument.URI, p.TextDocument.Text, p.TextDocument.LanguageID)
+
+	// Set container config for analyzers that need it
+	if doc, ok := s.state.GetDocument(p.TextDocument.URI); ok {
+		if doc.Analyzer != nil {
+			if ca, ok := doc.Analyzer.(analyzer.ContainerAware); ok {
+				ca.SetContainerConfig(s.config.Container)
+			}
+		}
+	}
+
 	return nil
 }
 

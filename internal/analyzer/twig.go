@@ -2,14 +2,19 @@ package analyzer
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 
 	twig "github.com/alexaandru/go-sitter-forest/twig"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
+	"github.com/shinyvision/vimfony/internal/config"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
 type TwigAnalyzer interface {
+	ContainerAware
 	IsTypingFunction(pos protocol.Position) (bool, string)
 }
 
@@ -19,6 +24,7 @@ type twigAnalyzer struct {
 	tree       *sitter.Tree
 	content    []byte
 	identQuery *sitter.Query
+	container  *config.ContainerConfig
 }
 
 func NewTwigAnalyzer() Analyzer {
@@ -96,4 +102,49 @@ func (a *twigAnalyzer) IsTypingFunction(pos protocol.Position) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+func (a *twigAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.container = container
+}
+
+func (a *twigAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.container == nil {
+		return nil, nil
+	}
+
+	found, prefix := a.IsTypingFunction(pos)
+	if !found {
+		return nil, nil
+	}
+
+	return a.twigFunctionCompletionItems(prefix), nil
+}
+
+func (a *twigAnalyzer) twigFunctionCompletionItems(prefix string) []protocol.CompletionItem {
+	items := []protocol.CompletionItem{}
+	kind := protocol.CompletionItemKindFunction
+
+	for name := range a.container.TwigFunctions {
+		if strings.HasPrefix(name, prefix) {
+			detail := fmt.Sprintf("%s twig function", name)
+			item := protocol.CompletionItem{
+				Label:  name,
+				Kind:   &kind,
+				Detail: &detail,
+			}
+			items = append(items, item)
+		}
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Label < items[j].Label
+	})
+
+	return items
 }

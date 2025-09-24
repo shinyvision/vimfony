@@ -3,14 +3,18 @@ package analyzer
 import (
 	"context"
 	"regexp"
+	"sort"
+	"strings"
 	"sync"
 
 	php "github.com/alexaandru/go-sitter-forest/php"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
+	"github.com/shinyvision/vimfony/internal/config"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
 type PhpAnalyzer interface {
+	ContainerAware
 	IsInAutoconfigure(pos protocol.Position) (bool, string)
 }
 
@@ -21,6 +25,7 @@ type phpAnalyzer struct {
 	servicesRe     *regexp.Regexp
 	tree           *sitter.Tree
 	content        []byte
+	container      *config.ContainerConfig
 }
 
 func NewPHPAnalyzer() Analyzer {
@@ -128,4 +133,81 @@ func (a *phpAnalyzer) IsInAutoconfigure(pos protocol.Position) (bool, string) {
 	}
 
 	return false, ""
+}
+
+func (a *phpAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.container = container
+}
+
+func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.container == nil {
+		return nil, nil
+	}
+
+	found, prefix := a.IsInAutoconfigure(pos)
+	if !found {
+		return nil, nil
+	}
+
+	if !strings.HasPrefix(prefix, "@") {
+		return nil, nil
+	}
+
+	servicePrefix := strings.TrimPrefix(prefix, "@")
+
+	return a.serviceCompletionItems(servicePrefix), nil
+}
+
+func (a *phpAnalyzer) serviceCompletionItems(prefix string) []protocol.CompletionItem {
+	items := []protocol.CompletionItem{}
+	seen := make(map[string]bool)
+	kind := protocol.CompletionItemKindKeyword
+
+	for id, class := range a.container.ServiceClasses {
+		if !strings.HasPrefix(id, ".") && strings.Contains(id, prefix) {
+			if _, ok := seen[id]; !ok {
+				item := protocol.CompletionItem{
+					Label:  id,
+					Kind:   &kind,
+					Detail: &class,
+				}
+				items = append(items, item)
+				seen[id] = true
+			}
+		}
+	}
+
+	for alias, serviceId := range a.container.ServiceAliases {
+		if !strings.HasPrefix(alias, ".") && strings.Contains(alias, prefix) {
+			if _, ok := seen[alias]; !ok {
+				detail := "alias for " + serviceId
+				item := protocol.CompletionItem{
+					Label:  alias,
+					Kind:   &kind,
+					Detail: &detail,
+				}
+				items = append(items, item)
+				seen[alias] = true
+			}
+		}
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		idI := items[i].Label
+		idJ := items[j].Label
+		refI := a.container.ServiceReferences[idI]
+		refJ := a.container.ServiceReferences[idJ]
+
+		if refI != refJ {
+			return refI > refJ
+		}
+		return idI < idJ
+	})
+
+	return items
 }

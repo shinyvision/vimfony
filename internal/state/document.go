@@ -28,6 +28,8 @@ func NewDocument(languageId string, content string) *Document {
 		doc.Analyzer = analyzer.NewXMLAnalyzer()
 	case "twig":
 		doc.Analyzer = analyzer.NewTwigAnalyzer()
+	case "yaml":
+		doc.Analyzer = analyzer.NewYamlAnalyzer()
 	}
 	return doc
 }
