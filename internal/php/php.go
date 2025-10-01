@@ -9,7 +9,7 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-var classNameRe = regexp.MustCompile(`([A-Z][a-zA-Z0-9_]*\\)+\n[A-Z][a-zA-Z0-9_]*`)
+var classNameRe = regexp.MustCompile(`([A-Z][a-zA-Z0-9_]*\\)+[a-zA-Z0-9_]+`)
 var classDefinitionRe = regexp.MustCompile(`(class|trait|interface)\s+([a-zA-Z0-9_]+)`) // Capture group 2 is the class name
 
 func PathAt(content string, pos protocol.Position) (string, bool) {
