@@ -44,6 +44,10 @@ func NewTwigAnalyzer() Analyzer {
 	    (variable) @assignedVariable
 	    (variable) @assignedValue
 	  )
+	  (for_statement
+	    (repeat) @repeat
+	    (variable) @assignedVariable
+	  )
 	`))
 
 	return &twigAnalyzer{
@@ -125,12 +129,13 @@ func (a *twigAnalyzer) isTypingVariable(pos protocol.Position) (bool, string) {
 }
 
 // getDefinedVariables extracts all variables defined in the current template using {% set %} statements
-func (a *twigAnalyzer) getDefinedVariables() map[string]string {
+func (a *twigAnalyzer) getDefinedVariables() (map[string]string, []string) {
 	if a.tree == nil || a.assignmentQuery == nil {
-		return nil
+		return nil, nil
 	}
 
 	variables := make(map[string]string)
+	var valueless []string
 
 	root := a.tree.RootNode()
 	qc := sitter.NewQueryCursor()
@@ -151,9 +156,10 @@ func (a *twigAnalyzer) getDefinedVariables() map[string]string {
 
 			if start >= 0 && end <= len(a.content) {
 				content := strings.TrimSpace(string(a.content[start:end]))
-				if captureName == "assignedVariable" {
+				switch captureName {
+				case "assignedVariable":
 					variableName = content
-				} else if captureName == "assignedValue" {
+				case "assignedValue":
 					assignedValue = content
 				}
 			}
@@ -161,10 +167,12 @@ func (a *twigAnalyzer) getDefinedVariables() map[string]string {
 
 		if variableName != "" && assignedValue != "" {
 			variables[variableName] = assignedValue
+		} else if _, ok := variables[variableName]; !ok && variableName != "" {
+			valueless = append(valueless, variableName)
 		}
 	}
 
-	return variables
+	return variables, valueless
 }
 
 func (a *twigAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
@@ -236,7 +244,7 @@ func (a *twigAnalyzer) twigVariableCompletionItems(prefix string) []protocol.Com
 	items := []protocol.CompletionItem{}
 	kind := protocol.CompletionItemKindVariable
 
-	definedVariables := a.getDefinedVariables()
+	definedVariables, capturedVariables := a.getDefinedVariables()
 
 	for variable, value := range definedVariables {
 		if strings.HasPrefix(variable, prefix) {
@@ -245,6 +253,15 @@ func (a *twigAnalyzer) twigVariableCompletionItems(prefix string) []protocol.Com
 				Label:  variable,
 				Kind:   &kind,
 				Detail: &detail,
+			}
+			items = append(items, item)
+		}
+	}
+	for _, variable := range capturedVariables {
+		if strings.HasPrefix(variable, prefix) {
+			item := protocol.CompletionItem{
+				Label: variable,
+				Kind:  &kind,
 			}
 			items = append(items, item)
 		}
