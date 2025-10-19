@@ -10,9 +10,7 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-
 type yamlAnalyzer struct {
-	content   []byte
 	lines     []string
 	container *config.ContainerConfig
 }
@@ -22,19 +20,17 @@ func NewYamlAnalyzer() Analyzer {
 }
 
 func (a *yamlAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
-	a.content = code
 	a.lines = strings.Split(string(code), "\n")
 	return nil
 }
 
 func (a *yamlAnalyzer) Close() {
-	a.content = nil
+	a.lines = nil
 }
 
 func (a *yamlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
-
 
 func (a *yamlAnalyzer) hasServicePrefix(pos protocol.Position) (bool, string) {
 	if int(pos.Line) >= len(a.lines) {

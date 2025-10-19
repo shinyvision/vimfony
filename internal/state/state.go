@@ -36,9 +36,6 @@ func (s *State) SetDocument(uri protocol.DocumentUri, text string, languageID st
 		// We probably never set the document if it already exists, but this doesn't hurt
 		existingDoc.Text = text
 		existingDoc.lines = strings.Split(text, "\n")
-		if existingDoc.Analyzer != nil {
-			existingDoc.Analyzer.Changed([]byte(text), nil)
-		}
 		return
 	}
 	doc := NewDocument(languageID, text)
