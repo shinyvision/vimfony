@@ -103,6 +103,7 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 
 	s.config.LoadPsr4Map()
 	s.config.Container.LoadFromXML(s.config.Psr4)
+	s.config.LoadRoutesMap()
 
 	logPathStats(s.config, "initialize")
 
@@ -130,6 +131,9 @@ func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams)
 		if doc.Analyzer != nil {
 			if ca, ok := doc.Analyzer.(analyzer.ContainerAware); ok {
 				ca.SetContainerConfig(s.config.Container)
+			}
+			if ra, ok := doc.Analyzer.(analyzer.RoutesAware); ok {
+				ra.SetRoutes(s.config.Routes)
 			}
 		}
 	}

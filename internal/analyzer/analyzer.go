@@ -24,3 +24,8 @@ type CompletionProvider interface {
 type ContainerAware interface {
 	SetContainerConfig(container *config.ContainerConfig)
 }
+
+// RoutesAware is an interface for analyzers that need access to routes
+type RoutesAware interface {
+	SetRoutes(routes config.RoutesMap)
+}

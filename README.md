@@ -30,6 +30,7 @@ These features are not yet implemented but would be useful:
 ### Coming up
 You can get these features if you build from source:
 - Autocomplete Twig variables
+- Autocomplete route names and parameters in Twig files
 
 ## How to use
 You can download a release for your OS and CPU or build from source:

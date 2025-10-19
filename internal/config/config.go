@@ -9,6 +9,7 @@ import (
 type Config struct {
 	Container *ContainerConfig
 	Psr4      Psr4Map
+	Routes    RoutesMap
 	VendorDir string
 	PhpPath   string
 }
@@ -17,6 +18,7 @@ func NewConfig() *Config {
 	return &Config{
 		Container: NewContainerConfig(),
 		Psr4:      make(Psr4Map),
+		Routes:    make(RoutesMap),
 		PhpPath:   "php",
 	}
 }
@@ -43,3 +45,24 @@ func (c *Config) LoadPsr4Map() {
 	logger.Infof("loaded %d psr-4 mappings", len(c.Psr4))
 }
 
+func (c *Config) LoadRoutesMap() {
+	logger := commonlog.GetLoggerf("vimfony.config")
+	if c.Container.ContainerXMLPath == "" {
+		return
+	}
+
+	containerPath := c.Container.ContainerXMLPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(c.Container.WorkspaceRoot, containerPath)
+	}
+
+	routesFile := filepath.Join(filepath.Dir(containerPath), "url_generating_routes.php")
+	routesMap, err := GetRoutesMap(routesFile, c.PhpPath)
+	if err != nil {
+		logger.Warningf("could not load routes map: %v", err)
+		return
+	}
+
+	c.Routes = routesMap
+	logger.Infof("loaded %d routes", len(c.Routes))
+}
