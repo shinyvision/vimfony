@@ -3,6 +3,7 @@ package analyzer
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,14 @@ type twigAnalyzer struct {
 	assignmentQuery   *sitter.Query
 	container         *config.ContainerConfig
 	routes            config.RoutesMap
+}
+
+type twigCallCtx struct {
+	fnNode   sitter.Node
+	fnName   string
+	argsNode sitter.Node
+	argIndex int
+	strNode  sitter.Node
 }
 
 func NewTwigAnalyzer() Analyzer {
@@ -87,7 +96,6 @@ func (a *twigAnalyzer) Close() {
 	}
 }
 
-// isTypingFunction checks if we're typing a function identifier or a variable since TS twig variables kinda look like functions
 func (a *twigAnalyzer) isTypingFunction(pos protocol.Position) (bool, string) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -126,10 +134,42 @@ func (a *twigAnalyzer) isTypingFunction(pos protocol.Position) (bool, string) {
 }
 
 func (a *twigAnalyzer) isTypingVariable(pos protocol.Position) (bool, string) {
-	return a.isTypingFunction(pos) // Variables and functions use the same detection logic in Twig
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.tree == nil || a.variableLikeQuery == nil {
+		return false, ""
+	}
+
+	caret := lspPosToByteOffset(a.content, pos)
+	if caret < 0 {
+		return false, ""
+	}
+
+	root := a.tree.RootNode()
+	qc := sitter.NewQueryCursor()
+	it := qc.Matches(a.variableLikeQuery, root, a.content)
+
+	for {
+		m := it.Next()
+		if m == nil {
+			break
+		}
+		for _, cap := range m.Captures {
+			if a.variableLikeQuery.CaptureNameForID(cap.Index) != "variableLike" {
+				continue
+			}
+			n := cap.Node
+			start := int(n.StartByte())
+			end := int(n.EndByte())
+			if caret < start || caret > end {
+				continue
+			}
+			return true, string(a.content[start:caret])
+		}
+	}
+	return false, ""
 }
 
-// getDefinedVariables extracts all variables defined in the current template using {% set %} statements
 func (a *twigAnalyzer) getDefinedVariables() (map[string]string, []string) {
 	if a.tree == nil || a.assignmentQuery == nil {
 		return nil, nil
@@ -154,22 +194,46 @@ func (a *twigAnalyzer) getDefinedVariables() (map[string]string, []string) {
 			n := cap.Node
 			start := int(n.StartByte())
 			end := int(n.EndByte())
-
-			if start >= 0 && end <= len(a.content) {
-				content := strings.TrimSpace(string(a.content[start:end]))
-				switch captureName {
-				case "assignedVariable":
-					variableName = content
-				case "assignedValue":
-					assignedValue = content
-				}
+			if start < 0 || end > len(a.content) {
+				continue
+			}
+			content := strings.TrimSpace(string(a.content[start:end]))
+			switch captureName {
+			case "assignedVariable":
+				variableName = content
+			case "assignedValue":
+				assignedValue = content
 			}
 		}
 
 		if variableName != "" && assignedValue != "" {
 			variables[variableName] = assignedValue
-		} else if _, ok := variables[variableName]; !ok && variableName != "" {
-			valueless = append(valueless, variableName)
+		} else if variableName != "" {
+			if _, ok := variables[variableName]; !ok {
+				valueless = append(valueless, variableName)
+			}
+		}
+	}
+
+	// Fallback: catch {% set name = ... %} where RHS is not a variable node (e.g. string/number)
+	setRe := regexp.MustCompile(`\{\%\s*set\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+	for _, m := range setRe.FindAllSubmatch(a.content, -1) {
+		name := string(m[1])
+		if name == "" {
+			continue
+		}
+		if _, ok := variables[name]; ok {
+			continue
+		}
+		found := false
+		for _, v := range valueless {
+			if v == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			valueless = append(valueless, name)
 		}
 	}
 
@@ -188,213 +252,164 @@ func (a *twigAnalyzer) SetRoutes(routes config.RoutesMap) {
 	a.routes = routes
 }
 
-// isTypingRouteName checks if we're typing inside the first string argument of path() or url()
-func (a *twigAnalyzer) isTypingRouteName(pos protocol.Position) (bool, string) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
+func (a *twigAnalyzer) routeContextAt(pos protocol.Position) (twigCallCtx, bool) {
 	if a.tree == nil {
-		return false, ""
+		return twigCallCtx{}, false
 	}
 
 	point, ok := lspPosToPoint(pos, a.content)
 	if !ok {
-		return false, ""
+		return twigCallCtx{}, false
 	}
-
 	root := a.tree.RootNode()
 	if root.IsNull() {
-		return false, ""
+		return twigCallCtx{}, false
 	}
 
-	node := root.NamedDescendantForPointRange(point, point)
-
-	// Walk up the tree to find if we're in a string that's the first argument of path/url
-	// Tree structure: function_call -> arguments -> argument -> argument_value -> string
-	for !node.IsNull() {
-		if node.Type() == "string" {
-			// Walk up to find the argument
-			argValue := node.Parent()
-			if !argValue.IsNull() && argValue.Type() == "argument_value" {
-				arg := argValue.Parent()
-				if !arg.IsNull() && arg.Type() == "argument" {
-					args := arg.Parent()
-					if !args.IsNull() && args.Type() == "arguments" {
-						// Check if this is the first argument
-						firstArg := args.NamedChild(0)
-						if !firstArg.IsNull() && firstArg.Equal(arg) {
-							// Get the function name
-							funcNode := args.Parent()
-							if !funcNode.IsNull() && funcNode.Type() == "function_call" {
-								funcNameNode := funcNode.NamedChild(0) // First named child is the function name
-								if !funcNameNode.IsNull() {
-									funcName := string(a.content[funcNameNode.StartByte():funcNameNode.EndByte()])
-									if funcName == "path" || funcName == "url" {
-										// Extract the partial route name
-										start := int(node.StartByte())
-										end := int(node.EndByte())
-										if start < len(a.content) && end <= len(a.content) {
-											// The string includes quotes
-											strWithQuotes := string(a.content[start:end])
-											if len(strWithQuotes) < 2 {
-												return false, ""
-											}
-											// Remove the quotes
-											strContent := strWithQuotes[1 : len(strWithQuotes)-1]
-
-											// Get the cursor position relative to the content inside quotes
-											caret := lspPosToByteOffset(a.content, pos)
-											if caret > start && caret < end {
-												// Cursor is inside the string (between quotes)
-												relCaret := caret - start - 1 // -1 for the opening quote
-												if relCaret >= 0 && relCaret <= len(strContent) {
-													return true, strContent[:relCaret]
-												}
-											}
-											return true, strContent
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
+	n := root.NamedDescendantForPointRange(point, point)
+	var str sitter.Node
+	for nn := n; !nn.IsNull(); nn = nn.Parent() {
+		if str.IsNull() && nn.Type() == "string" {
+			str = nn
 		}
-		node = node.Parent()
-	}
-
-	return false, ""
-}
-
-// isTypingRouteParameter checks if we're typing inside a hash key in the second argument of path() or url()
-// Returns: (found, routeName, paramPrefix)
-// Tree structure:
-//   - Normal case: hash -> hash_key -> string
-//   - Edge case (unborn key): hash -> hash_value -> string (when there's no hash_key yet)
-func (a *twigAnalyzer) isTypingRouteParameter(pos protocol.Position) (bool, string, string) {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	if a.tree == nil {
-		return false, "", ""
-	}
-
-	point, ok := lspPosToPoint(pos, a.content)
-	if !ok {
-		return false, "", ""
-	}
-
-	root := a.tree.RootNode()
-	if root.IsNull() {
-		return false, "", ""
-	}
-
-	node := root.NamedDescendantForPointRange(point, point)
-
-	// Walk up to find if we're in a hash key
-	for !node.IsNull() {
-		if node.Type() == "string" {
-			parent := node.Parent()
-
-			// Case 1: Normal hash_key case (e.g., {'key': value})
-			if !parent.IsNull() && parent.Type() == "hash_key" {
-				hashNode := parent.Parent()
-				if !hashNode.IsNull() && hashNode.Type() == "hash" {
-					found, routeName, prefix := a.extractRouteParameterInfo(node, hashNode, pos)
-					if found {
-						return found, routeName, prefix
-					}
-				}
+		if nn.Type() == "function_call" {
+			nameNode := nn.NamedChild(0)
+			if nameNode.IsNull() {
+				return twigCallCtx{}, false
+			}
+			fnName := string(a.content[nameNode.StartByte():nameNode.EndByte()])
+			if fnName != "path" && fnName != "url" {
+				return twigCallCtx{}, false
+			}
+			args := nn.NamedChild(1)
+			if args.IsNull() || args.Type() != "arguments" {
+				return twigCallCtx{}, false
 			}
 
-			// Case 2: Unborn hash_key case (e.g., {'key'} without colon and value)
-			// In this case, tree-sitter parses 'key' as a hash_value
-			if !parent.IsNull() && parent.Type() == "hash_value" {
-				hashNode := parent.Parent()
-				if !hashNode.IsNull() && hashNode.Type() == "hash" {
-					// Check if there's no hash_key in this hash (unborn key scenario)
-					hasHashKey := false
-					for i := uint32(0); i < hashNode.NamedChildCount(); i++ {
-						child := hashNode.NamedChild(i)
-						if !child.IsNull() && child.Type() == "hash_key" {
-							hasHashKey = true
+			argIdx := -1
+			for p := str; !p.IsNull(); p = p.Parent() {
+				if p.Type() == "argument" {
+					for i := uint32(0); i < args.NamedChildCount(); i++ {
+						if args.NamedChild(i).Equal(p) {
+							argIdx = int(i)
 							break
 						}
 					}
-
-					if !hasHashKey {
-						found, routeName, prefix := a.extractRouteParameterInfo(node, hashNode, pos)
-						if found {
-							return found, routeName, prefix
-						}
-					}
+					break
+				}
+				if p.Equal(nn) {
+					break
 				}
 			}
+			if argIdx < 0 {
+				return twigCallCtx{}, false
+			}
+			return twigCallCtx{
+				fnNode:   nn,
+				fnName:   fnName,
+				argsNode: args,
+				argIndex: argIdx,
+				strNode:  str,
+			}, true
 		}
-		node = node.Parent()
 	}
-
-	return false, "", ""
+	return twigCallCtx{}, false
 }
 
-// Helper function to extract route parameter information from a hash node
-func (a *twigAnalyzer) extractRouteParameterInfo(stringNode, hashNode sitter.Node, pos protocol.Position) (bool, string, string) {
-	// Check if this hash is inside the second argument to path/url
-	argValue := hashNode.Parent()
-	if !argValue.IsNull() && argValue.Type() == "argument_value" {
-		arg := argValue.Parent()
-		if !arg.IsNull() && arg.Type() == "argument" {
-			args := arg.Parent()
-			if !args.IsNull() && args.Type() == "arguments" {
-				funcNode := args.Parent()
-				if !funcNode.IsNull() && funcNode.Type() == "function_call" {
-					funcNameNode := funcNode.NamedChild(0)
-					if !funcNameNode.IsNull() {
-						funcName := string(a.content[funcNameNode.StartByte():funcNameNode.EndByte()])
-						if funcName == "path" || funcName == "url" {
-							// Get the route name from the first argument
-							firstArg := args.NamedChild(0)
-							if !firstArg.IsNull() {
-								// Navigate to the string inside the first argument
-								firstArgValue := firstArg.NamedChild(0)
-								if !firstArgValue.IsNull() {
-									firstArgString := firstArgValue.NamedChild(0)
-									if !firstArgString.IsNull() && firstArgString.Type() == "string" {
-										routeNameWithQuotes := string(a.content[firstArgString.StartByte():firstArgString.EndByte()])
-										if len(routeNameWithQuotes) < 2 {
-											return false, "", ""
-										}
-										routeName := routeNameWithQuotes[1 : len(routeNameWithQuotes)-1]
+func (a *twigAnalyzer) stringPrefix(str sitter.Node, pos protocol.Position) string {
+	if str.IsNull() {
+		return ""
+	}
+	sb, eb := int(str.StartByte()), int(str.EndByte())
+	if eb-sb < 2 {
+		return ""
+	}
+	inner := a.content[sb+1 : eb-1]
 
-										// Get the partial parameter key
-										start := int(stringNode.StartByte())
-										end := int(stringNode.EndByte())
-										if start < len(a.content) && end <= len(a.content) {
-											keyWithQuotes := string(a.content[start:end])
-											if len(keyWithQuotes) < 2 {
-												return false, "", ""
-											}
-											keyContent := keyWithQuotes[1 : len(keyWithQuotes)-1]
-
-											caret := lspPosToByteOffset(a.content, pos)
-											if caret > start && caret < end {
-												// Cursor is inside the string (between quotes)
-												relCaret := caret - start - 1 // -1 for the opening quote
-												if relCaret >= 0 && relCaret <= len(keyContent) {
-													return true, routeName, keyContent[:relCaret]
-												}
-											}
-											return true, routeName, keyContent
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
+	caret := lspPosToByteOffset(a.content, pos)
+	if caret > sb && caret < eb {
+		rel := caret - sb - 1
+		if rel >= 0 && rel <= len(inner) {
+			return string(inner[:rel])
 		}
 	}
-	return false, "", ""
+	return string(inner)
+}
+
+func (a *twigAnalyzer) firstArgRouteName(args sitter.Node) string {
+	if args.IsNull() || args.Type() != "arguments" {
+		return ""
+	}
+	first := args.NamedChild(0)
+	if first.IsNull() {
+		return ""
+	}
+	av := first.NamedChild(0)
+	if av.IsNull() {
+		return ""
+	}
+	str := av.NamedChild(0)
+	if str.IsNull() || str.Type() != "string" {
+		return ""
+	}
+	sb, eb := int(str.StartByte()), int(str.EndByte())
+	if eb-sb < 2 {
+		return ""
+	}
+	return string(a.content[sb+1 : eb-1])
+}
+
+func hasAnyHashKey(hashNode sitter.Node) bool {
+	for i := uint32(0); i < hashNode.NamedChildCount(); i++ {
+		if !hashNode.NamedChild(i).IsNull() && hashNode.NamedChild(i).Type() == "hash_key" {
+			return true
+		}
+	}
+	return false
+}
+
+// key context only: hash_key always, hash_value only when no hash_key exists yet
+func isParamKeyContext(strNode sitter.Node) bool {
+	p := strNode.Parent()
+	if p.IsNull() {
+		return false
+	}
+	switch p.Type() {
+	case "hash_key":
+		return true
+	case "hash_value":
+		hash := p.Parent()
+		if hash.IsNull() || hash.Type() != "hash" {
+			return false
+		}
+		return !hasAnyHashKey(hash)
+	default:
+		return false
+	}
+}
+
+func (a *twigAnalyzer) isTypingRouteName(pos protocol.Position) (bool, string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	ctx, ok := a.routeContextAt(pos)
+	if !ok || ctx.argIndex != 0 {
+		return false, ""
+	}
+	return true, a.stringPrefix(ctx.strNode, pos)
+}
+
+func (a *twigAnalyzer) isTypingRouteParameter(pos protocol.Position) (bool, string, string) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	ctx, ok := a.routeContextAt(pos)
+	if !ok || ctx.argIndex != 1 || !isParamKeyContext(ctx.strNode) {
+		return false, "", ""
+	}
+	routeName := a.firstArgRouteName(ctx.argsNode)
+	if routeName == "" {
+		return false, "", ""
+	}
+	return true, routeName, a.stringPrefix(ctx.strNode, pos)
 }
 
 func (a *twigAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
@@ -407,26 +422,14 @@ func (a *twigAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completio
 
 	var items []protocol.CompletionItem
 
-	// Check for route name completion
-	if foundRoute, routePrefix := a.isTypingRouteName(pos); foundRoute {
-		routeItems := a.routeNameCompletionItems(routePrefix)
-		items = append(items, routeItems...)
-	}
-
-	// Check for route parameter completion
-	if foundParam, routeName, paramPrefix := a.isTypingRouteParameter(pos); foundParam {
-		paramItems := a.routeParameterCompletionItems(routeName, paramPrefix)
-		items = append(items, paramItems...)
-	}
+	items = append(items, a.routeNameCompletionItems(pos)...)
+	items = append(items, a.routeParameterCompletionItems(pos)...)
 
 	if foundFunction, functionPrefix := a.isTypingFunction(pos); foundFunction {
-		functionItems := a.twigFunctionCompletionItems(functionPrefix)
-		items = append(items, functionItems...)
+		items = append(items, a.twigFunctionCompletionItems(functionPrefix)...)
 	}
-
 	if foundVariable, variablePrefix := a.isTypingVariable(pos); foundVariable {
-		variableItems := a.twigVariableCompletionItems(variablePrefix)
-		items = append(items, variableItems...)
+		items = append(items, a.twigVariableCompletionItems(variablePrefix)...)
 	}
 
 	if len(items) == 0 {
@@ -434,12 +437,11 @@ func (a *twigAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completio
 	}
 
 	sort.Slice(items, func(i, j int) bool {
-		labelI := items[i].Label
-		labelJ := items[j].Label
-		if len(labelI) != len(labelJ) {
-			return len(labelI) < len(labelJ)
+		li, lj := items[i].Label, items[j].Label
+		if len(li) != len(lj) {
+			return len(li) < len(lj)
 		}
-		return labelI < labelJ
+		return li < lj
 	})
 
 	return items, nil
@@ -452,19 +454,13 @@ func (a *twigAnalyzer) twigFunctionCompletionItems(prefix string) []protocol.Com
 	for name := range a.container.TwigFunctions {
 		if strings.HasPrefix(name, prefix) {
 			detail := fmt.Sprintf("%s twig function", name)
-			item := protocol.CompletionItem{
+			items = append(items, protocol.CompletionItem{
 				Label:  name,
 				Kind:   &kind,
 				Detail: &detail,
-			}
-			items = append(items, item)
+			})
 		}
 	}
-
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Label < items[j].Label
-	})
-
 	return items
 }
 
@@ -477,36 +473,36 @@ func (a *twigAnalyzer) twigVariableCompletionItems(prefix string) []protocol.Com
 	for variable, value := range definedVariables {
 		if strings.HasPrefix(variable, prefix) {
 			detail := fmt.Sprintf("{%% set %s = %s %%}", variable, value)
-			item := protocol.CompletionItem{
+			items = append(items, protocol.CompletionItem{
 				Label:  variable,
 				Kind:   &kind,
 				Detail: &detail,
-			}
-			items = append(items, item)
+			})
 		}
 	}
 	for _, variable := range capturedVariables {
 		if strings.HasPrefix(variable, prefix) {
-			item := protocol.CompletionItem{
+			items = append(items, protocol.CompletionItem{
 				Label: variable,
 				Kind:  &kind,
-			}
-			items = append(items, item)
+			})
 		}
 	}
-
 	return items
 }
 
-func (a *twigAnalyzer) routeNameCompletionItems(prefix string) []protocol.CompletionItem {
+func (a *twigAnalyzer) routeNameCompletionItems(pos protocol.Position) []protocol.CompletionItem {
+	found, prefix := a.isTypingRouteName(pos)
+	if !found {
+		return nil
+	}
+
 	items := []protocol.CompletionItem{}
 	kind := protocol.CompletionItemKindConstant
 
 	for name, route := range a.routes {
 		if strings.HasPrefix(name, prefix) {
 			detail := "Symfony route"
-
-			// Build documentation showing route name and parameters
 			var docBuilder strings.Builder
 			docBuilder.WriteString("**Route:** `")
 			docBuilder.WriteString(name)
@@ -528,24 +524,23 @@ func (a *twigAnalyzer) routeNameCompletionItems(prefix string) []protocol.Comple
 				Value: docBuilder.String(),
 			}
 
-			item := protocol.CompletionItem{
+			items = append(items, protocol.CompletionItem{
 				Label:         name,
 				Kind:          &kind,
 				Detail:        &detail,
 				Documentation: documentation,
-			}
-			items = append(items, item)
+			})
 		}
 	}
-
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Label < items[j].Label
-	})
-
 	return items
 }
 
-func (a *twigAnalyzer) routeParameterCompletionItems(routeName, prefix string) []protocol.CompletionItem {
+func (a *twigAnalyzer) routeParameterCompletionItems(pos protocol.Position) []protocol.CompletionItem {
+	found, routeName, prefix := a.isTypingRouteParameter(pos)
+	if !found {
+		return nil
+	}
+
 	items := []protocol.CompletionItem{}
 	kind := protocol.CompletionItemKindProperty
 
@@ -557,18 +552,12 @@ func (a *twigAnalyzer) routeParameterCompletionItems(routeName, prefix string) [
 	for _, param := range route.Parameters {
 		if strings.HasPrefix(param, prefix) {
 			detail := fmt.Sprintf("parameter for route %s", routeName)
-			item := protocol.CompletionItem{
+			items = append(items, protocol.CompletionItem{
 				Label:  param,
 				Kind:   &kind,
 				Detail: &detail,
-			}
-			items = append(items, item)
+			})
 		}
 	}
-
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].Label < items[j].Label
-	})
-
 	return items
 }
