@@ -1,9 +1,12 @@
 package analyzer
 
 import (
+	"bytes"
 	"os"
+	"strings"
 	"testing"
 
+	"github.com/shinyvision/vimfony/internal/config"
 	"github.com/stretchr/testify/require"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
@@ -40,5 +43,186 @@ func BenchmarkIsInAutoconfigure(b *testing.B) {
 
 	for b.Loop() {
 		_, _ = analyzer.(*phpAnalyzer).isInAutoconfigure(pos)
+	}
+}
+
+func TestPHPPropertyTypeCollection(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+	types := pa.propertyTypes
+
+	expected := map[string][]string{
+		"urlGenerator":          {urlGeneratorFQN},
+		"urlGeneratorInterface": {urlGeneratorInterfaceFQN},
+		"notARouter":            {"App\\ThisIsNotARouter"},
+		"myAliasedRouter":       {routerInterfaceFQN},
+		"router":                {routerFQN},
+		"routerInterface":       {routerInterfaceFQN},
+		"fqnRouter":             {routerInterfaceFQN},
+	}
+
+	require.Len(t, types, len(expected))
+
+	for name, want := range expected {
+		got, ok := types[name]
+		require.Truef(t, ok, "missing property %s", name)
+		require.ElementsMatchf(t, want, got, "property %s type mismatch", name)
+	}
+}
+
+func TestPHPRouterRouteNameCompletion(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some", "unborn_param_name"},
+		},
+		"another_route": {
+			Name:       "another_route",
+			Parameters: []string{"foo"},
+		},
+	}
+	pa.SetRoutes(routes)
+
+	target := "$this->router->generate('a_route'"
+	offset := strings.Index(target, "'a_route'") + 1
+	pos := positionAfter(t, content, target, offset)
+
+	items, err := pa.OnCompletion(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	var labels []string
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+
+	require.Contains(t, labels, "a_route")
+	require.Contains(t, labels, "another_route")
+}
+
+func TestPHPRouterRouteParameterCompletion(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some", "unborn_param_name"},
+		},
+	}
+	pa.SetRoutes(routes)
+
+	target := "$this->router->generate('a_route', ['some' => 'params'])"
+	offset := strings.Index(target, "['some'") + len("['")
+	pos := positionAfter(t, content, target, offset)
+
+	items, err := pa.OnCompletion(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	var labels []string
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+
+	require.Contains(t, labels, "some")
+	require.Contains(t, labels, "unborn_param_name")
+}
+
+func TestPHPRouterRouteParameterCompletionWithoutArrow(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some", "unborn_param_name"},
+		},
+	}
+	pa.SetRoutes(routes)
+
+	target := "$this->router->generate('a_route', ['unborn_param_name'])"
+	offset := strings.Index(target, "['unborn_param_name") + len("['")
+	pos := positionAfter(t, content, target, offset)
+
+	items, err := pa.OnCompletion(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	var labels []string
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+
+	require.Contains(t, labels, "some")
+	require.Contains(t, labels, "unborn_param_name")
+}
+
+func TestPHPRouterRouteCompletionNotOfferedForNonRouter(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some"},
+		},
+	}
+	pa.SetRoutes(routes)
+
+	target := "$this->notARouter->generate('generating_something_that_is_not_a_route')"
+	offset := strings.Index(target, "('generating_something_that_is_not_a_route") + len("('")
+	pos := positionAfter(t, content, target, offset)
+
+	items, err := pa.OnCompletion(pos)
+	require.NoError(t, err)
+	require.Nil(t, items)
+}
+
+func positionAfter(t *testing.T, content []byte, needle string, offset int) protocol.Position {
+	idx := bytes.Index(content, []byte(needle))
+	require.NotEqualf(t, -1, idx, "needle %q not found", needle)
+
+	target := idx + offset
+	require.GreaterOrEqual(t, target, 0)
+	require.LessOrEqual(t, target, len(content))
+
+	line := bytes.Count(content[:target], []byte("\n"))
+	col := target
+	if last := bytes.LastIndex(content[:target], []byte("\n")); last >= 0 {
+		col = target - last - 1
+	}
+
+	return protocol.Position{
+		Line:      uint32(line),
+		Character: uint32(col),
 	}
 }
