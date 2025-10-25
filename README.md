@@ -4,10 +4,8 @@
 
 This is a language server that adds Symfony integration in Neovim.
 
-It uses your go-to definition keymapping (`gd` for most vimmers)
-
-If you find a bug or want a feature, you can create an issue or a PR. I’ll probably take a look at it, but no promises.
-I’m working on getting code parsing to work using tree-sitter. If that’s done, we can have autocomplete for Twig functions!
+If you find a bug or want a feature, you can create an issue or a PR. I’ll probably take a look at it.
+We finally have several autocomplete features working in Vimfony!
 
 ## Features
 - `gd` Twig templates with @Bundle support
@@ -15,25 +13,25 @@ I’m working on getting code parsing to work using tree-sitter. If that’s don
 - `gd` class from within yaml / xml files
 - `gd` service definitions for example @service_container
 - Autocomplete service names (works in yaml, xml and autoconfigure php attributes)
-- Autocomplete twig functions
+- Autocomplete Twig functions
+- Autocomplete Twig variables
+- Autocomplete route names and parameters in Twig files and PHP files
 
 ## Planned features
 These features are not yet implemented but would be useful:
 (feel free to create a PR if you want to contribute)
 - Autocomplete Twig files
-- Autocomplete route names
 - Autocomplete form options
 - `gd` Twig components
 - `gd` routes
 - Version checker & updater (`vimfony update`)
+- Figure out a way to split up the analysis being done in `internal/analyzer/php.go`
 
 ### Coming up
-You can get these features if you build from source:
-- Autocomplete Twig variables
-- Autocomplete route names and parameters in Twig files
+Main should be up-to-date with the latest release, so you’re good to go! 🥳
 
 ## How to use
-You can download a release for your OS and CPU or build from source:
+You can [download a release](https://github.com/shinyvision/vimfony/releases) for your OS and CPU or build from source:
 ```bash
 git clone https://github.com/shinyvision/vimfony.git
 cd vimfony
@@ -44,29 +42,24 @@ And then move the `vimfony` binary to somewhere in your $PATH
 
 Configure LSP (Neovim):
 ```lua
-local lspconfig = require 'lspconfig'
-local configs = require 'lspconfig.configs'
-local util = lspconfig.util
+local git_root = vim.fs.root(0, ".git")
 
-configs.vimfony = {
-  default_config = {
+if git_root ~= nil then
+  vim.lsp.config('vimfony', {
     cmd = { "vimfony" },
     filetypes = { "php", "twig", "yaml", "xml" }, -- You can remove file types if you don't like it, but then it won't work in those files
-    root_dir = function(fname)
-      return util.root_pattern("composer.json", ".git")(fname)
-    end,
+    root_markers = { ".git" },
     single_file_support = true,
     init_options = {
       roots = { "templates" },
-      container_xml_path = util.root_pattern("composer.json", ".git")() .. "/var/cache/dev/App_KernelDevDebugContainer.xml", -- Where your container XML is
-      vendor_dir = util.root_pattern("composer.json", ".git")() .. "/vendor", -- Where your vendor directory is
+      container_xml_path = (git_root .. "/var/cache/dev/App_KernelDevDebugContainer.xml"),
+      vendor_dir = git_root .. "/vendor",
       -- Optional:
       -- php_path = "/usr/bin/php",
     },
-  },
-}
-
-lspconfig.vimfony.setup({})
+  })
+  vim.lsp.enable('vimfony')
+end
 ```
 
 If you use this project and like what it does, then please **give it a star** on Github.
@@ -74,6 +67,4 @@ If you use this project and like what it does, then please **give it a star** on
 PS. I highly recommend purchasing a license for [Intelephense](https://intelephense.com/). It’s worth your 25 bucks.
 
 ## Finally
-This is just a quick project because I was missing features in my workflow and I’m sharing it here with you. I am by no means an expert in language servers.
-
-Also, I have no idea if this works for VSCode. I have never used VSCode, but I’ve heard it uses language servers in the same way as Neovim. Maybe it’ll work, maybe it won’t.
+I have no idea if this works for VSCode. I have never used VSCode, but I’ve heard it uses language servers in the same way as Neovim. Maybe it’ll work, maybe it won’t.
