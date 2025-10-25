@@ -25,6 +25,14 @@ type phpAnalyzer struct {
 	propertyTypes  map[string][]string
 }
 
+type phpRouteCallCtx struct {
+	callNode sitter.Node
+	argsNode sitter.Node
+	argIndex int
+	strNode  sitter.Node
+	property string
+}
+
 const (
 	urlGeneratorInterfaceFQN = "Symfony\\Component\\Routing\\Generator\\UrlGeneratorInterface"
 	urlGeneratorFQN          = "Symfony\\Component\\Routing\\Generator\\UrlGenerator"
@@ -32,20 +40,20 @@ const (
 	routerFQN                = "Symfony\\Component\\Routing\\Router"
 )
 
-var (
-	routerTargetTypes = map[string]string{
-		strings.ToLower(urlGeneratorInterfaceFQN): urlGeneratorInterfaceFQN,
-		strings.ToLower(urlGeneratorFQN):          urlGeneratorFQN,
-		strings.ToLower(routerInterfaceFQN):       routerInterfaceFQN,
-		strings.ToLower(routerFQN):                routerFQN,
+var routerCanonical = func() map[string]string {
+	c := map[string]string{}
+	fqn := []string{
+		urlGeneratorInterfaceFQN,
+		urlGeneratorFQN,
+		routerInterfaceFQN,
+		routerFQN,
 	}
-	routerTargetShortTypes = map[string]string{
-		strings.ToLower(shortName(urlGeneratorInterfaceFQN)): urlGeneratorInterfaceFQN,
-		strings.ToLower(shortName(urlGeneratorFQN)):          urlGeneratorFQN,
-		strings.ToLower(shortName(routerInterfaceFQN)):       routerInterfaceFQN,
-		strings.ToLower(shortName(routerFQN)):                routerFQN,
+	for _, x := range fqn {
+		c[strings.ToLower(x)] = x
+		c[strings.ToLower(shortName(x))] = x
 	}
-)
+	return c
+}()
 
 func NewPHPAnalyzer() Analyzer {
 	p := sitter.NewParser()
@@ -194,36 +202,29 @@ func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 
 func (a *phpAnalyzer) serviceCompletionItems(prefix string) []protocol.CompletionItem {
 	items := []protocol.CompletionItem{}
-	seen := make(map[string]bool)
+	seen := map[string]struct{}{}
 	kind := protocol.CompletionItemKindKeyword
 
-	for id, class := range a.container.ServiceClasses {
-		if !strings.HasPrefix(id, ".") && strings.Contains(id, prefix) {
-			if _, ok := seen[id]; !ok {
-				item := protocol.CompletionItem{
-					Label:  id,
-					Kind:   &kind,
-					Detail: &class,
-				}
-				items = append(items, item)
-				seen[id] = true
-			}
+	add := func(label, detail string) {
+		if strings.HasPrefix(label, ".") || !strings.Contains(label, prefix) {
+			return
 		}
+		if _, ok := seen[label]; ok {
+			return
+		}
+		items = append(items, protocol.CompletionItem{
+			Label:  label,
+			Kind:   &kind,
+			Detail: &detail,
+		})
+		seen[label] = struct{}{}
 	}
 
+	for id, class := range a.container.ServiceClasses {
+		add(id, class)
+	}
 	for alias, serviceId := range a.container.ServiceAliases {
-		if !strings.HasPrefix(alias, ".") && strings.Contains(alias, prefix) {
-			if _, ok := seen[alias]; !ok {
-				detail := "alias for " + serviceId
-				item := protocol.CompletionItem{
-					Label:  alias,
-					Kind:   &kind,
-					Detail: &detail,
-				}
-				items = append(items, item)
-				seen[alias] = true
-			}
-		}
+		add(alias, "alias for "+serviceId)
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -241,12 +242,14 @@ func (a *phpAnalyzer) serviceCompletionItems(prefix string) []protocol.Completio
 	return items
 }
 
-type phpRouteCallCtx struct {
-	callNode sitter.Node
-	argsNode sitter.Node
-	argIndex int
-	strNode  sitter.Node
-	property string
+func sortByShortLex(items []protocol.CompletionItem) {
+	sort.Slice(items, func(i, j int) bool {
+		li, lj := items[i].Label, items[j].Label
+		if len(li) != len(lj) {
+			return len(li) < len(lj)
+		}
+		return li < lj
+	})
 }
 
 func (a *phpAnalyzer) phpRouteNameCompletionItems(pos protocol.Position) []protocol.CompletionItem {
@@ -292,14 +295,7 @@ func (a *phpAnalyzer) phpRouteNameCompletionItems(pos protocol.Position) []proto
 		})
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		li, lj := items[i].Label, items[j].Label
-		if len(li) != len(lj) {
-			return len(li) < len(lj)
-		}
-		return li < lj
-	})
-
+	sortByShortLex(items)
 	return items
 }
 
@@ -329,14 +325,7 @@ func (a *phpAnalyzer) phpRouteParameterCompletionItems(pos protocol.Position) []
 		})
 	}
 
-	sort.Slice(items, func(i, j int) bool {
-		li, lj := items[i].Label, items[j].Label
-		if len(li) != len(lj) {
-			return len(li) < len(lj)
-		}
-		return li < lj
-	})
-
+	sortByShortLex(items)
 	return items
 }
 
@@ -480,35 +469,43 @@ func (a *phpAnalyzer) phpRouteNameFromArgs(args sitter.Node) string {
 		return ""
 	}
 
-	switch value.Type() {
-	case "string":
-		return a.stringContent(value)
-	case "string_content":
-		parent := value.Parent()
-		if !parent.IsNull() && parent.Type() == "string" {
-			return a.stringContent(parent)
-		}
-	}
+	return a.stringContent(value)
+}
 
-	return ""
+func (a *phpAnalyzer) asStringNode(n sitter.Node) sitter.Node {
+	if n.IsNull() {
+		return n
+	}
+	if n.Type() == "string_content" {
+		n = n.Parent()
+	}
+	if n.IsNull() || n.Type() != "string" {
+		return sitter.Node{}
+	}
+	return n
+}
+
+func (a *phpAnalyzer) stringInnerBounds(n sitter.Node) (start, end int, ok bool) {
+	n = a.asStringNode(n)
+	if n.IsNull() {
+		return 0, 0, false
+	}
+	sb, eb := int(n.StartByte()), int(n.EndByte())
+	if eb-sb < 2 {
+		return 0, 0, false
+	}
+	return sb + 1, eb - 1, true
 }
 
 func (a *phpAnalyzer) stringPrefix(str sitter.Node, pos protocol.Position) string {
+	str = a.asStringNode(str)
 	if str.IsNull() {
 		return ""
 	}
-	if str.Type() == "string_content" {
-		str = str.Parent()
-	}
-	if str.IsNull() || str.Type() != "string" {
-		return ""
-	}
-
 	sb, eb := int(str.StartByte()), int(str.EndByte())
 	if eb-sb < 2 {
 		return ""
 	}
-
 	inner := a.content[sb+1 : eb-1]
 	caret := lspPosToByteOffset(a.content, pos)
 	if caret > sb && caret < eb {
@@ -521,20 +518,11 @@ func (a *phpAnalyzer) stringPrefix(str sitter.Node, pos protocol.Position) strin
 }
 
 func (a *phpAnalyzer) stringContent(str sitter.Node) string {
-	if str.IsNull() {
+	s, e, ok := a.stringInnerBounds(str)
+	if !ok {
 		return ""
 	}
-	if str.Type() == "string_content" {
-		str = str.Parent()
-	}
-	if str.IsNull() || str.Type() != "string" {
-		return ""
-	}
-	sb, eb := int(str.StartByte()), int(str.EndByte())
-	if eb-sb < 2 {
-		return ""
-	}
-	return string(a.content[sb+1 : eb-1])
+	return string(a.content[s:e])
 }
 
 func (a *phpAnalyzer) isPHPParamKeyContext(str sitter.Node) bool {
@@ -558,7 +546,7 @@ func (a *phpAnalyzer) isPHPParamKeyContext(str sitter.Node) bool {
 			return false
 		}
 
-		for i := uint32(0); i < namedCount; i++ {
+		for i := range namedCount {
 			child := cur.NamedChild(i)
 			if !child.Equal(str) {
 				continue
@@ -670,7 +658,25 @@ func (a *phpAnalyzer) collectNamespaceUses(root sitter.Node) map[string]string {
 		stack = stack[:len(stack)-1]
 
 		if node.Type() == "namespace_use_declaration" {
-			a.processNamespaceUseDeclaration(node, uses)
+			if typeNode := node.ChildByFieldName("type"); !typeNode.IsNull() {
+				continue
+			}
+			prefix := ""
+			for i := uint32(0); i < node.NamedChildCount(); i++ {
+				child := node.NamedChild(i)
+				switch child.Type() {
+				case "namespace_name":
+					prefix = normalizeFQN(child.Content(a.content))
+				case "namespace_use_group":
+					for j := uint32(0); j < child.NamedChildCount(); j++ {
+						if child.NamedChild(j).Type() == "namespace_use_clause" {
+							a.addUseClause(child.NamedChild(j), prefix, uses)
+						}
+					}
+				case "namespace_use_clause":
+					a.addUseClause(child, "", uses)
+				}
+			}
 			continue
 		}
 
@@ -680,43 +686,6 @@ func (a *phpAnalyzer) collectNamespaceUses(root sitter.Node) map[string]string {
 	}
 
 	return uses
-}
-
-func (a *phpAnalyzer) processNamespaceUseDeclaration(node sitter.Node, uses map[string]string) {
-	if node.IsNull() {
-		return
-	}
-
-	if typeNode := node.ChildByFieldName("type"); !typeNode.IsNull() {
-		// Ignore use function/const declarations
-		return
-	}
-
-	prefix := ""
-	for i := uint32(0); i < node.NamedChildCount(); i++ {
-		child := node.NamedChild(i)
-		switch child.Type() {
-		case "namespace_name":
-			prefix = normalizeFQN(child.Content(a.content))
-		case "namespace_use_group":
-			a.processNamespaceUseGroup(child, prefix, uses)
-		case "namespace_use_clause":
-			a.addUseClause(child, "", uses)
-		}
-	}
-}
-
-func (a *phpAnalyzer) processNamespaceUseGroup(node sitter.Node, prefix string, uses map[string]string) {
-	if node.IsNull() {
-		return
-	}
-
-	for i := uint32(0); i < node.NamedChildCount(); i++ {
-		child := node.NamedChild(i)
-		if child.Type() == "namespace_use_clause" {
-			a.addUseClause(child, prefix, uses)
-		}
-	}
 }
 
 func (a *phpAnalyzer) addUseClause(clause sitter.Node, prefix string, uses map[string]string) {
@@ -739,7 +708,6 @@ func (a *phpAnalyzer) addUseClause(clause sitter.Node, prefix string, uses map[s
 		switch child.Type() {
 		case "qualified_name", "relative_name", "name":
 			nameNode = child
-			break
 		}
 		if !nameNode.IsNull() {
 			break
@@ -912,30 +880,18 @@ func canonicalRouterType(name string) (string, bool) {
 	if normalized == "" {
 		return "", false
 	}
-
-	if canonical, ok := routerTargetTypes[strings.ToLower(normalized)]; ok {
+	if canonical, ok := routerCanonical[strings.ToLower(normalized)]; ok {
 		return canonical, true
 	}
-
-	if canonical, ok := routerTargetShortTypes[strings.ToLower(shortName(normalized))]; ok {
+	if canonical, ok := routerCanonical[strings.ToLower(shortName(normalized))]; ok {
 		return canonical, true
 	}
-
 	return "", false
 }
 
 func normalizeFQN(name string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return ""
-	}
-	for strings.HasPrefix(name, "?") {
-		name = strings.TrimPrefix(name, "?")
-	}
-	for strings.HasPrefix(name, "\\") {
-		name = strings.TrimPrefix(name, "\\")
-	}
-	name = strings.ReplaceAll(name, "\\\\", "\\")
+	name = strings.TrimSpace(strings.ReplaceAll(name, "\\\\", "\\"))
+	name = strings.TrimLeft(name, "?\\")
 	return name
 }
 
