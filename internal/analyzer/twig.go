@@ -496,43 +496,7 @@ func (a *twigAnalyzer) routeNameCompletionItems(pos protocol.Position) []protoco
 	if !found {
 		return nil
 	}
-
-	items := []protocol.CompletionItem{}
-	kind := protocol.CompletionItemKindConstant
-
-	for name, route := range a.routes {
-		if strings.HasPrefix(name, prefix) {
-			detail := "Symfony route"
-			var docBuilder strings.Builder
-			docBuilder.WriteString("**Route:** `")
-			docBuilder.WriteString(name)
-			docBuilder.WriteString("`\n\n")
-
-			if len(route.Parameters) > 0 {
-				docBuilder.WriteString("**Parameters:**\n")
-				for _, param := range route.Parameters {
-					docBuilder.WriteString("- `")
-					docBuilder.WriteString(param)
-					docBuilder.WriteString("`\n")
-				}
-			} else {
-				docBuilder.WriteString("*No parameters*")
-			}
-
-			documentation := protocol.MarkupContent{
-				Kind:  protocol.MarkupKindMarkdown,
-				Value: docBuilder.String(),
-			}
-
-			items = append(items, protocol.CompletionItem{
-				Label:         name,
-				Kind:          &kind,
-				Detail:        &detail,
-				Documentation: documentation,
-			})
-		}
-	}
-	return items
+	return makeRouteNameCompletionItems(a.routes, prefix)
 }
 
 func (a *twigAnalyzer) routeParameterCompletionItems(pos protocol.Position) []protocol.CompletionItem {
@@ -540,24 +504,5 @@ func (a *twigAnalyzer) routeParameterCompletionItems(pos protocol.Position) []pr
 	if !found {
 		return nil
 	}
-
-	items := []protocol.CompletionItem{}
-	kind := protocol.CompletionItemKindProperty
-
-	route, ok := a.routes[routeName]
-	if !ok {
-		return items
-	}
-
-	for _, param := range route.Parameters {
-		if strings.HasPrefix(param, prefix) {
-			detail := fmt.Sprintf("parameter for route %s", routeName)
-			items = append(items, protocol.CompletionItem{
-				Label:  param,
-				Kind:   &kind,
-				Detail: &detail,
-			})
-		}
-	}
-	return items
+	return makeRouteParameterCompletionItems(a.routes, routeName, prefix)
 }

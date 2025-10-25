@@ -242,61 +242,12 @@ func (a *phpAnalyzer) serviceCompletionItems(prefix string) []protocol.Completio
 	return items
 }
 
-func sortByShortLex(items []protocol.CompletionItem) {
-	sort.Slice(items, func(i, j int) bool {
-		li, lj := items[i].Label, items[j].Label
-		if len(li) != len(lj) {
-			return len(li) < len(lj)
-		}
-		return li < lj
-	})
-}
-
 func (a *phpAnalyzer) phpRouteNameCompletionItems(pos protocol.Position) []protocol.CompletionItem {
 	found, prefix := a.isTypingPhpRouteName(pos)
 	if !found {
 		return nil
 	}
-
-	items := make([]protocol.CompletionItem, 0)
-	kind := protocol.CompletionItemKindConstant
-
-	for name, route := range a.routes {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-
-		detail := "Symfony route"
-		var doc strings.Builder
-		doc.WriteString("**Route:** `")
-		doc.WriteString(name)
-		doc.WriteString("`\n\n")
-		if len(route.Parameters) > 0 {
-			doc.WriteString("**Parameters:**\n")
-			for _, param := range route.Parameters {
-				doc.WriteString("- `")
-				doc.WriteString(param)
-				doc.WriteString("`\n")
-			}
-		} else {
-			doc.WriteString("*No parameters*")
-		}
-
-		documentation := protocol.MarkupContent{
-			Kind:  protocol.MarkupKindMarkdown,
-			Value: doc.String(),
-		}
-
-		items = append(items, protocol.CompletionItem{
-			Label:         name,
-			Kind:          &kind,
-			Detail:        &detail,
-			Documentation: documentation,
-		})
-	}
-
-	sortByShortLex(items)
-	return items
+	return makeRouteNameCompletionItems(a.routes, prefix)
 }
 
 func (a *phpAnalyzer) phpRouteParameterCompletionItems(pos protocol.Position) []protocol.CompletionItem {
@@ -304,29 +255,7 @@ func (a *phpAnalyzer) phpRouteParameterCompletionItems(pos protocol.Position) []
 	if !found {
 		return nil
 	}
-
-	route, ok := a.routes[routeName]
-	if !ok {
-		return nil
-	}
-
-	items := make([]protocol.CompletionItem, 0)
-	kind := protocol.CompletionItemKindProperty
-
-	for _, param := range route.Parameters {
-		if !strings.HasPrefix(param, prefix) {
-			continue
-		}
-		detail := "parameter for route " + routeName
-		items = append(items, protocol.CompletionItem{
-			Label:  param,
-			Kind:   &kind,
-			Detail: &detail,
-		})
-	}
-
-	sortByShortLex(items)
-	return items
+	return makeRouteParameterCompletionItems(a.routes, routeName, prefix)
 }
 
 func (a *phpAnalyzer) isTypingPhpRouteName(pos protocol.Position) (bool, string) {
