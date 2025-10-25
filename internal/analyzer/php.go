@@ -2,8 +2,10 @@ package analyzer
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -22,7 +24,13 @@ type phpAnalyzer struct {
 	content        []byte
 	container      *config.ContainerConfig
 	routes         config.RoutesMap
-	propertyTypes  map[string][]string
+	propertyTypes  map[string][]typeOccurrence
+	functionVars   map[string]map[string][]typeOccurrence
+}
+
+type typeOccurrence struct {
+	Type string
+	Line int
 }
 
 type phpRouteCallCtx struct {
@@ -31,6 +39,7 @@ type phpRouteCallCtx struct {
 	argIndex int
 	strNode  sitter.Node
 	property string
+	variable string
 }
 
 const (
@@ -54,6 +63,8 @@ var routerCanonical = func() map[string]string {
 	}
 	return c
 }()
+
+var docblockVarRe = regexp.MustCompile(`@var\s+([^\s]+)\s+\$([A-Za-z_][A-Za-z0-9_]*)`)
 
 func NewPHPAnalyzer() Analyzer {
 	p := sitter.NewParser()
@@ -89,6 +100,7 @@ func (a *phpAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
 	}
 	a.tree = newTree
 	a.propertyTypes = a.collectPropertyTypes()
+	a.functionVars = a.collectFunctionVariableTypes()
 	return nil
 }
 
@@ -359,22 +371,47 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 			return phpRouteCallCtx{}, false
 		}
 
+		callLine := int(callNode.StartPoint().Row) + 1
+		funcName := a.enclosingFunctionName(callNode)
+
 		propertyName := a.routerPropertyNameFromMemberAccess(objectNode)
-		if propertyName == "" || !a.propertyHasRouterType(propertyName) {
-			return phpRouteCallCtx{}, false
+		if propertyName != "" {
+			if !a.propertyHasRouterType(propertyName) {
+				return phpRouteCallCtx{}, false
+			}
+			if str.IsNull() {
+				return phpRouteCallCtx{}, false
+			}
+			return phpRouteCallCtx{
+				callNode: callNode,
+				argsNode: argsNode,
+				argIndex: argIndex,
+				strNode:  str,
+				property: propertyName,
+			}, true
 		}
 
-		if str.IsNull() {
-			return phpRouteCallCtx{}, false
+		if objectNode.Type() == "variable_name" {
+			varName := a.variableNameFromNode(objectNode)
+			if varName == "" {
+				return phpRouteCallCtx{}, false
+			}
+			if !a.variableHasRouterType(funcName, varName, callLine) {
+				return phpRouteCallCtx{}, false
+			}
+			if str.IsNull() {
+				return phpRouteCallCtx{}, false
+			}
+			return phpRouteCallCtx{
+				callNode: callNode,
+				argsNode: argsNode,
+				argIndex: argIndex,
+				strNode:  str,
+				variable: varName,
+			}, true
 		}
 
-		return phpRouteCallCtx{
-			callNode: callNode,
-			argsNode: argsNode,
-			argIndex: argIndex,
-			strNode:  str,
-			property: propertyName,
-		}, true
+		return phpRouteCallCtx{}, false
 	}
 
 	return phpRouteCallCtx{}, false
@@ -528,16 +565,16 @@ func (a *phpAnalyzer) propertyHasRouterType(name string) bool {
 	if len(a.propertyTypes) == 0 {
 		return false
 	}
-	for _, typ := range a.propertyTypes[name] {
-		if _, ok := canonicalRouterType(typ); ok {
+	for _, occ := range a.propertyTypes[name] {
+		if _, ok := canonicalRouterType(occ.Type); ok {
 			return true
 		}
 	}
 	return false
 }
 
-func (a *phpAnalyzer) collectPropertyTypes() map[string][]string {
-	types := make(map[string][]string)
+func (a *phpAnalyzer) collectPropertyTypes() map[string][]typeOccurrence {
+	types := make(map[string][]typeOccurrence)
 	if a.tree == nil {
 		return types
 	}
@@ -559,11 +596,11 @@ func (a *phpAnalyzer) collectPropertyTypes() map[string][]string {
 				if len(collected) == 0 {
 					continue
 				}
-				types[name] = mergeTypeLists(types[name], collected)
+				types[name] = mergeTypeOccurrences(types[name], collected)
 			}
 		case "property_promotion_parameter":
 			if name, collected, ok := a.propertyTypeFromPromotion(node, uses); ok && len(collected) > 0 {
-				types[name] = mergeTypeLists(types[name], collected)
+				types[name] = mergeTypeOccurrences(types[name], collected)
 			}
 		}
 
@@ -573,6 +610,363 @@ func (a *phpAnalyzer) collectPropertyTypes() map[string][]string {
 	}
 
 	return types
+}
+
+func (a *phpAnalyzer) collectFunctionVariableTypes() map[string]map[string][]typeOccurrence {
+	result := make(map[string]map[string][]typeOccurrence)
+	if a.tree == nil {
+		return result
+	}
+	root := a.tree.RootNode()
+	if root.IsNull() {
+		return result
+	}
+
+	uses := a.collectNamespaceUses(root)
+	stack := []sitter.Node{root}
+
+	for len(stack) > 0 {
+		node := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		switch node.Type() {
+		case "method_declaration", "function_definition", "function_declaration":
+			funcName := a.functionIdentifier(node)
+			result[funcName] = a.collectVariableTypesForFunction(node, uses)
+		}
+
+		for i := uint32(0); i < node.NamedChildCount(); i++ {
+			stack = append(stack, node.NamedChild(i))
+		}
+	}
+
+	return result
+}
+
+func (a *phpAnalyzer) collectVariableTypesForFunction(node sitter.Node, uses map[string]string) map[string][]typeOccurrence {
+	types := make(map[string][]typeOccurrence)
+	params := node.ChildByFieldName("parameters")
+	if !params.IsNull() {
+		for i := uint32(0); i < params.NamedChildCount(); i++ {
+			param := params.NamedChild(i)
+			nameNode := param.ChildByFieldName("name")
+			name := a.variableNameFromNode(nameNode)
+			if name == "" {
+				continue
+			}
+			typeNames := a.collectTypeNames(param.ChildByFieldName("type"), uses)
+			if len(typeNames) == 0 {
+				continue
+			}
+			line := int(param.StartPoint().Row) + 1
+			occ := occurrencesFromTypeNames(typeNames, line)
+			types[name] = mergeTypeOccurrences(types[name], occ)
+		}
+	}
+
+	body := a.functionBodyNode(node)
+	if body.IsNull() {
+		return types
+	}
+
+	pendingDoc := make(map[string][]string)
+	for i := uint32(0); i < body.NamedChildCount(); i++ {
+		stmt := body.NamedChild(i)
+		switch stmt.Type() {
+		case "comment":
+			varName, docTypes := a.parseDocblockVar(stmt, uses)
+			if varName != "" && len(docTypes) > 0 {
+				pendingDoc[varName] = docTypes
+			}
+			continue
+		case "expression_statement":
+			expr := stmt.NamedChild(0)
+			if expr.IsNull() || expr.Type() != "assignment_expression" {
+				pendingDoc = make(map[string][]string)
+				continue
+			}
+			left := expr.ChildByFieldName("left")
+			varName := a.variableNameFromNode(left)
+			if varName == "" {
+				pendingDoc = make(map[string][]string)
+				continue
+			}
+			line := int(expr.StartPoint().Row) + 1
+			right := expr.ChildByFieldName("right")
+			inferred := a.inferExpressionTypeNames(right, uses, types, line-1)
+			docs := pendingDoc[varName]
+			combined := mergeTypeNameLists(docs, inferred)
+			if len(combined) > 0 {
+				occ := occurrencesFromTypeNames(combined, line)
+				types[varName] = mergeTypeOccurrences(types[varName], occ)
+			}
+			delete(pendingDoc, varName)
+		default:
+			// reset pending docblock hints when encountering unrelated statements
+			pendingDoc = make(map[string][]string)
+			continue
+		}
+		// docblocks apply only to immediately following statement
+		pendingDoc = make(map[string][]string)
+	}
+
+	return types
+}
+
+func (a *phpAnalyzer) functionBodyNode(node sitter.Node) sitter.Node {
+	if body := node.ChildByFieldName("body"); !body.IsNull() {
+		return body
+	}
+	return sitter.Node{}
+}
+
+func (a *phpAnalyzer) functionIdentifier(node sitter.Node) string {
+	name := a.functionNameFromNode(node)
+	if name != "" {
+		return name
+	}
+	return fmt.Sprintf("anonymous@%d", int(node.StartPoint().Row)+1)
+}
+
+func (a *phpAnalyzer) functionNameFromNode(node sitter.Node) string {
+	nameNode := node.ChildByFieldName("name")
+	if nameNode.IsNull() {
+		return ""
+	}
+	return strings.TrimSpace(nameNode.Content(a.content))
+}
+
+func (a *phpAnalyzer) parseDocblockVar(node sitter.Node, uses map[string]string) (string, []string) {
+	text := node.Content(a.content)
+	matches := docblockVarRe.FindStringSubmatch(text)
+	if len(matches) < 3 {
+		return "", nil
+	}
+	typeExpr := matches[1]
+	varName := matches[2]
+	parts := strings.Split(typeExpr, "|")
+	types := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		nullHint := false
+		if strings.HasPrefix(part, "?") {
+			nullHint = true
+			part = strings.TrimPrefix(part, "?")
+		}
+		if nullHint {
+			types = mergeTypeNameLists(types, []string{"null"})
+		}
+		lower := strings.ToLower(part)
+		if lower == "null" {
+			types = mergeTypeNameLists(types, []string{"null"})
+			continue
+		}
+		if strings.HasSuffix(part, "[]") {
+			types = mergeTypeNameLists(types, []string{"array"})
+			continue
+		}
+		resolved := a.resolveRawTypeName(part, uses)
+		if resolved == "" {
+			resolved = part
+		}
+		types = mergeTypeNameLists(types, []string{resolved})
+	}
+	return varName, types
+}
+
+func (a *phpAnalyzer) inferExpressionTypeNames(expr sitter.Node, uses map[string]string, current map[string][]typeOccurrence, line int) []string {
+	if expr.IsNull() {
+		return nil
+	}
+	switch expr.Type() {
+	case "member_access_expression", "nullsafe_member_access_expression":
+		if name := a.routerPropertyNameFromMemberAccess(expr); name != "" {
+			return typeNamesFromOccurrences(a.propertyTypes[name])
+		}
+		object := expr.ChildByFieldName("object")
+		if object.IsNull() {
+			return nil
+		}
+		if object.Type() == "variable_name" {
+			varName := a.variableNameFromNode(object)
+			if varName != "" {
+				return typeNamesAtOrBefore(current[varName], line)
+			}
+		}
+	case "variable_name":
+		varName := a.variableNameFromNode(expr)
+		if varName == "" {
+			return nil
+		}
+		return typeNamesAtOrBefore(current[varName], line)
+	case "qualified_name", "relative_name", "name":
+		candidate := strings.TrimSpace(expr.Content(a.content))
+		if candidate == "" {
+			return nil
+		}
+		resolved := a.resolveRawTypeName(candidate, uses)
+		if resolved == "" {
+			resolved = candidate
+		}
+		return []string{resolved}
+	case "string":
+		return []string{"string"}
+	case "integer":
+		return []string{"int"}
+	case "float", "floating_point_number", "floating_literal":
+		return []string{"float"}
+	case "true", "false", "boolean":
+		return []string{"bool"}
+	case "null", "null_literal":
+		return []string{"null"}
+	case "array_creation_expression":
+		return []string{"array"}
+	case "object_creation_expression":
+		return a.collectTypeNames(expr.ChildByFieldName("type"), uses)
+	case "cast_expression":
+		return a.collectTypeNames(expr.ChildByFieldName("type"), uses)
+	case "parenthesized_expression":
+		inner := expr.ChildByFieldName("expression")
+		if inner.IsNull() && expr.NamedChildCount() > 0 {
+			inner = expr.NamedChild(0)
+		}
+		return a.inferExpressionTypeNames(inner, uses, current, line)
+	}
+	return nil
+}
+
+func mergeTypeNameLists(existing, additions []string) []string {
+	if len(additions) == 0 && len(existing) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(existing)+len(additions))
+	result := make([]string, 0, len(existing)+len(additions))
+	for _, name := range existing {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, name)
+	}
+	for _, name := range additions {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, name)
+	}
+	return result
+}
+
+func occurrencesFromTypeNames(names []string, line int) []typeOccurrence {
+	if len(names) == 0 {
+		return nil
+	}
+	occ := make([]typeOccurrence, 0, len(names))
+	for _, typ := range names {
+		typ = strings.TrimSpace(typ)
+		if typ == "" {
+			continue
+		}
+		occ = append(occ, typeOccurrence{Type: typ, Line: line})
+	}
+	return occ
+}
+
+func typeNamesFromOccurrences(entries []typeOccurrence) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(entries))
+	types := make([]string, 0, len(entries))
+	for _, occ := range entries {
+		key := strings.ToLower(occ.Type)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		types = append(types, occ.Type)
+	}
+	return types
+}
+
+func typeNamesAtOrBefore(entries []typeOccurrence, line int) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	maxLine := -1
+	for _, occ := range entries {
+		if line >= 0 && occ.Line > line {
+			continue
+		}
+		if occ.Line > maxLine {
+			maxLine = occ.Line
+		}
+	}
+	if maxLine == -1 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var result []string
+	for _, occ := range entries {
+		if occ.Line != maxLine {
+			continue
+		}
+		key := strings.ToLower(occ.Type)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, occ.Type)
+	}
+	return result
+}
+
+func (a *phpAnalyzer) enclosingFunctionName(node sitter.Node) string {
+	for cur := node; !cur.IsNull(); cur = cur.Parent() {
+		switch cur.Type() {
+		case "method_declaration", "function_definition", "function_declaration":
+			return a.functionIdentifier(cur)
+		}
+	}
+	return ""
+}
+
+func (a *phpAnalyzer) variableHasRouterType(funcName, varName string, line int) bool {
+	if funcName == "" || varName == "" {
+		return false
+	}
+	if a.functionVars == nil {
+		return false
+	}
+	vars, ok := a.functionVars[funcName]
+	if !ok {
+		return false
+	}
+	entries, ok := vars[varName]
+	if !ok {
+		return false
+	}
+	types := typeNamesAtOrBefore(entries, line)
+	for _, typ := range types {
+		if _, ok := canonicalRouterType(typ); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *phpAnalyzer) collectNamespaceUses(root sitter.Node) map[string]string {
@@ -668,8 +1062,8 @@ func (a *phpAnalyzer) addUseClause(clause sitter.Node, prefix string, uses map[s
 	uses[strings.ToLower(full)] = full
 }
 
-func (a *phpAnalyzer) propertyTypesFromDeclaration(node sitter.Node, uses map[string]string) map[string][]string {
-	result := make(map[string][]string)
+func (a *phpAnalyzer) propertyTypesFromDeclaration(node sitter.Node, uses map[string]string) map[string][]typeOccurrence {
+	result := make(map[string][]typeOccurrence)
 
 	typeNode := node.ChildByFieldName("type")
 	if typeNode.IsNull() {
@@ -686,18 +1080,23 @@ func (a *phpAnalyzer) propertyTypesFromDeclaration(node sitter.Node, uses map[st
 		if child.Type() != "property_element" {
 			continue
 		}
+		line := int(child.StartPoint().Row) + 1
 		nameNode := child.ChildByFieldName("name")
 		name := a.variableNameFromNode(nameNode)
 		if name == "" {
 			continue
 		}
-		result[name] = append(result[name], typeNames...)
+		occ := make([]typeOccurrence, 0, len(typeNames))
+		for _, typ := range typeNames {
+			occ = append(occ, typeOccurrence{Type: typ, Line: line})
+		}
+		result[name] = append(result[name], occ...)
 	}
 
 	return result
 }
 
-func (a *phpAnalyzer) propertyTypeFromPromotion(node sitter.Node, uses map[string]string) (string, []string, bool) {
+func (a *phpAnalyzer) propertyTypeFromPromotion(node sitter.Node, uses map[string]string) (string, []typeOccurrence, bool) {
 	typeNode := node.ChildByFieldName("type")
 	if typeNode.IsNull() {
 		return "", nil, false
@@ -714,7 +1113,13 @@ func (a *phpAnalyzer) propertyTypeFromPromotion(node sitter.Node, uses map[strin
 		return "", nil, false
 	}
 
-	return name, typeNames, true
+	line := int(node.StartPoint().Row) + 1
+	occ := make([]typeOccurrence, 0, len(typeNames))
+	for _, typ := range typeNames {
+		occ = append(occ, typeOccurrence{Type: typ, Line: line})
+	}
+
+	return name, occ, true
 }
 
 func (a *phpAnalyzer) collectTypeNames(typeNode sitter.Node, uses map[string]string) []string {
@@ -724,25 +1129,61 @@ func (a *phpAnalyzer) collectTypeNames(typeNode sitter.Node, uses map[string]str
 
 	names := make([]string, 0)
 	seen := make(map[string]struct{})
-	stack := []sitter.Node{typeNode}
-	for len(stack) > 0 {
-		node := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-
-		if node.Type() == "named_type" {
-			if resolved := a.resolveNamedType(node, uses); resolved != "" {
+	var collect func(n sitter.Node)
+	collect = func(n sitter.Node) {
+		if n.IsNull() {
+			return
+		}
+		switch n.Type() {
+		case "named_type":
+			if resolved := a.resolveNamedType(n, uses); resolved != "" {
 				key := strings.ToLower(resolved)
 				if _, ok := seen[key]; !ok {
 					seen[key] = struct{}{}
 					names = append(names, resolved)
 				}
 			}
-		}
-
-		for i := uint32(0); i < node.NamedChildCount(); i++ {
-			stack = append(stack, node.NamedChild(i))
+		case "primitive_type":
+			raw := strings.TrimSpace(n.Content(a.content))
+			if raw != "" {
+				raw = strings.ToLower(raw)
+				if _, ok := seen[raw]; !ok {
+					seen[raw] = struct{}{}
+					names = append(names, raw)
+				}
+			}
+		case "nullable_type":
+			collect(n.ChildByFieldName("type"))
+			if _, ok := seen["null"]; !ok {
+				seen["null"] = struct{}{}
+				names = append(names, "null")
+			}
+		case "union_type", "intersection_type":
+			for i := uint32(0); i < n.NamedChildCount(); i++ {
+				collect(n.NamedChild(i))
+			}
+		case "qualified_name", "relative_name", "name":
+			candidate := strings.TrimSpace(n.Content(a.content))
+			if candidate == "" {
+				break
+			}
+			resolved := a.resolveRawTypeName(candidate, uses)
+			if resolved == "" {
+				break
+			}
+			key := strings.ToLower(resolved)
+			if _, ok := seen[key]; !ok {
+				seen[key] = struct{}{}
+				names = append(names, resolved)
+			}
+		default:
+			for i := uint32(0); i < n.NamedChildCount(); i++ {
+				collect(n.NamedChild(i))
+			}
+			return
 		}
 	}
+	collect(typeNode)
 
 	return names
 }
@@ -785,16 +1226,37 @@ func (a *phpAnalyzer) resolveNamedType(node sitter.Node, uses map[string]string)
 	return raw
 }
 
-func mergeTypeLists(existing, additions []string) []string {
+func (a *phpAnalyzer) resolveRawTypeName(raw string, uses map[string]string) string {
+	raw = normalizeFQN(raw)
+	if raw == "" {
+		return ""
+	}
+
+	lowered := strings.ToLower(raw)
+	if full, ok := uses[lowered]; ok {
+		return full
+	}
+	if full, ok := uses[strings.ToLower(shortName(raw))]; ok {
+		return full
+	}
+
+	return raw
+}
+
+func mergeTypeOccurrences(existing, additions []typeOccurrence) []typeOccurrence {
 	if len(additions) == 0 {
 		return existing
 	}
 	seen := make(map[string]struct{}, len(existing))
-	for _, e := range existing {
-		seen[strings.ToLower(e)] = struct{}{}
+	for _, occ := range existing {
+		key := strings.ToLower(occ.Type) + "#" + strconv.Itoa(occ.Line)
+		seen[key] = struct{}{}
 	}
 	for _, add := range additions {
-		key := strings.ToLower(add)
+		if add.Type == "" {
+			continue
+		}
+		key := strings.ToLower(add.Type) + "#" + strconv.Itoa(add.Line)
 		if _, ok := seen[key]; ok {
 			continue
 		}

@@ -71,7 +71,12 @@ func TestPHPPropertyTypeCollection(t *testing.T) {
 	for name, want := range expected {
 		got, ok := types[name]
 		require.Truef(t, ok, "missing property %s", name)
-		require.ElementsMatchf(t, want, got, "property %s type mismatch", name)
+		gotTypes := make([]string, 0, len(got))
+		for _, occ := range got {
+			gotTypes = append(gotTypes, occ.Type)
+			require.Greater(t, occ.Line, 0)
+		}
+		require.ElementsMatchf(t, want, gotTypes, "property %s type mismatch", name)
 	}
 }
 
@@ -111,6 +116,72 @@ func TestPHPRouterRouteNameCompletion(t *testing.T) {
 
 	require.Contains(t, labels, "a_route")
 	require.Contains(t, labels, "another_route")
+}
+
+func TestPHPRouterRouteCompletionForAssignedVariable(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some", "unborn_param_name"},
+		},
+	}
+	pa.SetRoutes(routes)
+
+	target := "$i = $assignedRouterToVariable->generate('a_route', ['some' => 'params'])"
+	offset := strings.Index(target, "'a_route'") + 1
+	pos := positionAfter(t, content, target, offset)
+
+	items, err := pa.OnCompletion(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	var labels []string
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+
+	require.Contains(t, labels, "a_route")
+}
+
+func TestPHPRouterRouteCompletionForDocblockVariable(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some"},
+		},
+	}
+	pa.SetRoutes(routes)
+
+	target := "$j = $typeHintedRouter->generate('a_route', ['some' => 'params'])"
+	offset := strings.Index(target, "'a_route'") + 1
+	pos := positionAfter(t, content, target, offset)
+
+	items, err := pa.OnCompletion(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	var labels []string
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+
+	require.Contains(t, labels, "a_route")
 }
 
 func TestPHPRouterRouteParameterCompletion(t *testing.T) {

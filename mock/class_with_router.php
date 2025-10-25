@@ -39,5 +39,13 @@ class ClassWithRouter extends AbstractController
         $f = $this->urlGeneratorInterface->generate('a_route', ['some' => 'params']);
         $g = $this->notARouter->generate('generating_something_that_is_not_a_route');
         $h = $this->router->generate('a_route', ['unborn_param_name']);
+
+        $assignedRouterToVariable = $this->router;
+
+        /** @var RouterInterface $typeHintedRouter */
+        $typeHintedRouter = ThisIsNotARouter::butThisIs();
+
+        $i = $assignedRouterToVariable->generate('a_route', ['some' => 'params']);
+        $j = $typeHintedRouter->generate('a_route', ['some' => 'params']);
     }
 }
