@@ -17,7 +17,7 @@ func (ctx *analysisContext) collectFunctionVariableTypes(properties map[string][
 		return result
 	}
 
-	uses := ctx.collectNamespaceUses(root)
+	uses := ctx.uses
 	stack := []sitter.Node{root}
 
 	for len(stack) > 0 {
@@ -29,6 +29,8 @@ func (ctx *analysisContext) collectFunctionVariableTypes(properties map[string][
 			funcName := ctx.functionIdentifier(node)
 			scope := FunctionScope{
 				Variables: ctx.collectVariableTypesForFunction(node, uses, properties),
+				StartLine: int(node.StartPoint().Row) + 1,
+				EndLine:   int(node.EndPoint().Row) + 1,
 			}
 			result[funcName] = scope
 		}
@@ -124,6 +126,32 @@ func (ctx *analysisContext) functionIdentifier(node sitter.Node) string {
 		return name
 	}
 	return fmt.Sprintf("anonymous@%d", int(node.StartPoint().Row)+1)
+}
+
+func (ctx *analysisContext) refreshFunctionScope(node sitter.Node, props map[string][]TypeOccurrence, vars map[string]FunctionScope) {
+	startLine := int(node.StartPoint().Row) + 1
+	endLine := int(node.EndPoint().Row) + 1
+	pruneFunctionsInRange(vars, startLine, endLine)
+
+	name := ctx.functionIdentifier(node)
+	refreshed := ctx.collectVariableTypesForFunction(node, ctx.uses, props)
+	varScope := FunctionScope{
+		Variables: refreshed,
+		StartLine: startLine,
+		EndLine:   endLine,
+	}
+	vars[name] = varScope
+}
+
+func pruneFunctionsInRange(vars map[string]FunctionScope, startLine, endLine int) {
+	for name, scope := range vars {
+		if scope.StartLine == 0 && scope.EndLine == 0 {
+			continue
+		}
+		if scope.StartLine <= endLine && scope.EndLine >= startLine {
+			delete(vars, name)
+		}
+	}
 }
 
 func (ctx *analysisContext) functionNameFromNode(node sitter.Node) string {

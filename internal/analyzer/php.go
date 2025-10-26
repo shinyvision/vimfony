@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	phpforest "github.com/alexaandru/go-sitter-forest/php"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
@@ -16,15 +17,20 @@ import (
 )
 
 type phpAnalyzer struct {
-	parser         *sitter.Parser
-	mu             sync.RWMutex
-	attributeQuery *sitter.Query
-	servicesRe     *regexp.Regexp
-	tree           *sitter.Tree
-	content        []byte
-	container      *config.ContainerConfig
-	routes         config.RoutesMap
-	index          php.IndexedTree
+	parser              *sitter.Parser
+	mu                  sync.RWMutex
+	attributeQuery      *sitter.Query
+	servicesRe          *regexp.Regexp
+	tree                *sitter.Tree
+	content             []byte
+	container           *config.ContainerConfig
+	routes              config.RoutesMap
+	index               php.IndexedTree
+	staticAnalyzer      *php.StaticAnalyzer
+	analysisTimer       *time.Timer
+	analysisVersion     int64
+	lastAnalyzedVersion int64
+	dirtyRanges         []php.ByteRange
 }
 
 type phpRouteCallCtx struct {
@@ -42,6 +48,8 @@ const (
 	routerInterfaceFQN       = "Symfony\\Component\\Routing\\RouterInterface"
 	routerFQN                = "Symfony\\Component\\Routing\\Router"
 )
+
+const analysisDebounceInterval = 500 * time.Millisecond
 
 var routerCanonical = func() map[string]string {
 	c := map[string]string{}
@@ -72,12 +80,12 @@ func NewPHPAnalyzer() Analyzer {
 		parser:         p,
 		attributeQuery: attributeQuery,
 		servicesRe:     servicesRe,
+		staticAnalyzer: php.NewStaticAnalyzer(),
 	}
 }
 
 func (a *phpAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	a.content = code
 	if a.tree != nil && change != nil {
@@ -85,13 +93,44 @@ func (a *phpAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
 	}
 	newTree, err := a.parser.ParseString(context.Background(), a.tree, code)
 	if err != nil {
+		a.mu.Unlock()
 		return err
 	}
 	if a.tree != nil {
 		a.tree.Close()
 	}
 	a.tree = newTree
-	a.index = php.AnalyzeStatic(&a.content, a.tree)
+
+	version := a.analysisVersion + 1
+	a.analysisVersion = version
+
+	if change == nil {
+		a.dirtyRanges = nil
+		if a.analysisTimer != nil {
+			a.analysisTimer.Stop()
+			a.analysisTimer = nil
+		}
+	} else {
+		a.recordDirtyRangeLocked(change)
+	}
+
+	immediate := change == nil
+
+	if !immediate {
+		if a.analysisTimer != nil {
+			a.analysisTimer.Stop()
+		}
+		timer := time.AfterFunc(analysisDebounceInterval, func() {
+			a.runAnalysis(version)
+		})
+		a.analysisTimer = timer
+	}
+
+	a.mu.Unlock()
+
+	if immediate {
+		a.runAnalysis(version)
+	}
 	return nil
 }
 
@@ -101,6 +140,90 @@ func (a *phpAnalyzer) Close() {
 	if a.tree != nil {
 		a.tree.Close()
 		a.tree = nil
+	}
+}
+
+func (a *phpAnalyzer) recordDirtyRangeLocked(edit *sitter.InputEdit) {
+	if edit == nil {
+		a.dirtyRanges = nil
+		return
+	}
+	rangeStart := uint32(edit.StartIndex)
+	rangeEnd := uint32(edit.NewEndIndex)
+	if edit.OldEndIndex > edit.NewEndIndex {
+		rangeEnd = uint32(edit.OldEndIndex)
+	}
+	if rangeStart > rangeEnd {
+		rangeStart, rangeEnd = rangeEnd, rangeStart
+	}
+	if rangeStart == rangeEnd {
+		rangeEnd++
+	}
+	merged := appendRange(a.dirtyRanges, php.ByteRange{Start: rangeStart, End: rangeEnd})
+	a.dirtyRanges = merged
+}
+
+func appendRange(ranges []php.ByteRange, rng php.ByteRange) []php.ByteRange {
+	ranges = append(ranges, rng)
+	if len(ranges) == 0 {
+		return ranges
+	}
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].Start == ranges[j].Start {
+			return ranges[i].End < ranges[j].End
+		}
+		return ranges[i].Start < ranges[j].Start
+	})
+
+	merged := make([]php.ByteRange, 0, len(ranges))
+	current := ranges[0]
+	for _, r := range ranges[1:] {
+		if r.Start <= current.End {
+			if r.End > current.End {
+				current.End = r.End
+			}
+			continue
+		}
+		merged = append(merged, current)
+		current = r
+	}
+	merged = append(merged, current)
+	return merged
+}
+
+func (a *phpAnalyzer) runAnalysis(version int64) {
+	a.mu.RLock()
+	if a.analysisVersion != version || a.tree == nil {
+		a.mu.RUnlock()
+		return
+	}
+	treeCopy := a.tree.Copy()
+	dirty := append([]php.ByteRange(nil), a.dirtyRanges...)
+	contentCopy := append([]byte(nil), a.content...)
+	analyzer := a.staticAnalyzer
+	a.mu.RUnlock()
+
+	if analyzer == nil || treeCopy == nil {
+		if treeCopy != nil {
+			treeCopy.Close()
+		}
+		return
+	}
+	defer treeCopy.Close()
+
+	index := analyzer.Update(&contentCopy, treeCopy, dirty)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.analysisVersion != version {
+		return
+	}
+	a.index = index
+	a.lastAnalyzedVersion = version
+	a.dirtyRanges = nil
+	if a.analysisTimer != nil {
+		a.analysisTimer.Stop()
+		a.analysisTimer = nil
 	}
 }
 

@@ -1,6 +1,9 @@
 package php
 
 import (
+	"fmt"
+	"sync"
+
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 )
 
@@ -30,6 +33,8 @@ type TypeReference struct {
 // FunctionScope stores all variables indexed for a single function or method.
 type FunctionScope struct {
 	Variables map[string][]TypeOccurrence
+	StartLine int
+	EndLine   int
 }
 
 // IndexedTree contains lightweight static analysis metadata for a PHP source file.
@@ -41,28 +46,17 @@ type IndexedTree struct {
 	Types      map[string][]TypeReference
 }
 
+// ByteRange represents a range of bytes in the source content.
+type ByteRange struct {
+	Start uint32
+	End   uint32
+}
+
 // AnalyzeStatic builds an IndexedTree for the provided PHP source content and syntax tree.
 // Both arguments are optional; a nil pointer yields an empty index.
 func AnalyzeStatic(content *[]byte, tree *sitter.Tree) IndexedTree {
-	index := IndexedTree{
-		Properties: make(map[string][]TypeOccurrence),
-		Variables:  make(map[string]FunctionScope),
-		Types:      make(map[string][]TypeReference),
-	}
-
-	ctx := newAnalysisContext(content, tree)
-	if ctx == nil {
-		return index
-	}
-
-	properties := ctx.collectPropertyTypes()
-	variables := ctx.collectFunctionVariableTypes(properties)
-
-	index.Properties = properties
-	index.Variables = variables
-	index.Types = computeTypeReferences(index.Properties, index.Variables)
-
-	return index
+	analyzer := NewStaticAnalyzer()
+	return analyzer.Update(content, tree, nil)
 }
 
 func computeTypeReferences(properties map[string][]TypeOccurrence, functions map[string]FunctionScope) map[string][]TypeReference {
@@ -101,6 +95,7 @@ func computeTypeReferences(properties map[string][]TypeOccurrence, functions map
 type analysisContext struct {
 	content *[]byte
 	tree    *sitter.Tree
+	uses    map[string]string
 }
 
 func newAnalysisContext(content *[]byte, tree *sitter.Tree) *analysisContext {
@@ -111,10 +106,12 @@ func newAnalysisContext(content *[]byte, tree *sitter.Tree) *analysisContext {
 	if root.IsNull() {
 		return nil
 	}
-	return &analysisContext{
+	ctx := &analysisContext{
 		content: content,
 		tree:    tree,
 	}
+	ctx.uses = ctx.collectNamespaceUses(ctx.rootNode())
+	return ctx
 }
 
 func (ctx *analysisContext) bytes() []byte {
@@ -129,4 +126,153 @@ func (ctx *analysisContext) rootNode() sitter.Node {
 		return sitter.Node{}
 	}
 	return ctx.tree.RootNode()
+}
+
+// StaticAnalyzer incrementally maintains an IndexedTree for a PHP source file.
+type StaticAnalyzer struct {
+	mu    sync.Mutex
+	index IndexedTree
+	built bool
+}
+
+// NewStaticAnalyzer constructs an analyzer with an empty index.
+func NewStaticAnalyzer() *StaticAnalyzer {
+	return &StaticAnalyzer{
+		index: IndexedTree{
+			Properties: make(map[string][]TypeOccurrence),
+			Variables:  make(map[string]FunctionScope),
+			Types:      make(map[string][]TypeReference),
+		},
+	}
+}
+
+// Update recomputes the index, optionally reusing previous state for dirty ranges.
+// When dirty is nil, the index is rebuilt from scratch.
+func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []ByteRange) IndexedTree {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	ctx := newAnalysisContext(content, tree)
+	if ctx == nil {
+		a.index = IndexedTree{
+			Properties: make(map[string][]TypeOccurrence),
+			Variables:  make(map[string]FunctionScope),
+			Types:      make(map[string][]TypeReference),
+		}
+		a.built = false
+		return a.index
+	}
+
+	if !a.built || len(dirty) == 0 {
+		props := ctx.collectPropertyTypes()
+		vars := ctx.collectFunctionVariableTypes(props)
+		a.index = IndexedTree{
+			Properties: props,
+			Variables:  vars,
+			Types:      computeTypeReferences(props, vars),
+		}
+		a.built = true
+		return a.index
+	}
+
+	props := clonePropertyIndex(a.index.Properties)
+	vars := cloneFunctionIndex(a.index.Variables)
+
+	index := ctx.updateIndex(props, vars, dirty)
+	a.index = index
+	return a.index
+}
+
+func clonePropertyIndex(in map[string][]TypeOccurrence) map[string][]TypeOccurrence {
+	out := make(map[string][]TypeOccurrence, len(in))
+	for k, v := range in {
+		copied := make([]TypeOccurrence, len(v))
+		copy(copied, v)
+		out[k] = copied
+	}
+	return out
+}
+
+func cloneFunctionIndex(in map[string]FunctionScope) map[string]FunctionScope {
+	out := make(map[string]FunctionScope, len(in))
+	for k, v := range in {
+		copied := make(map[string][]TypeOccurrence, len(v.Variables))
+		for name, occs := range v.Variables {
+			ref := make([]TypeOccurrence, len(occs))
+			copy(ref, occs)
+			copied[name] = ref
+		}
+		out[k] = FunctionScope{
+			Variables: copied,
+			StartLine: v.StartLine,
+			EndLine:   v.EndLine,
+		}
+	}
+	return out
+}
+
+func (ctx *analysisContext) updateIndex(props map[string][]TypeOccurrence, vars map[string]FunctionScope, dirty []ByteRange) IndexedTree {
+	root := ctx.rootNode()
+	if root.IsNull() {
+		return IndexedTree{
+			Properties: props,
+			Variables:  vars,
+			Types:      computeTypeReferences(props, vars),
+		}
+	}
+
+	visited := make(map[string]struct{})
+	for _, r := range dirty {
+		start := int(r.Start)
+		end := int(r.End)
+		if end < start {
+			start, end = end, start
+		}
+		node := root.NamedDescendantForByteRange(uint32(start), uint32(end))
+		if ctx.refreshForNode(node, visited, props, vars) {
+			// Fallback to full rebuild when incremental update is insufficient.
+			freshProps := ctx.collectPropertyTypes()
+			freshVars := ctx.collectFunctionVariableTypes(freshProps)
+			return IndexedTree{
+				Properties: freshProps,
+				Variables:  freshVars,
+				Types:      computeTypeReferences(freshProps, freshVars),
+			}
+		}
+	}
+
+	index := IndexedTree{
+		Properties: props,
+		Variables:  vars,
+		Types:      computeTypeReferences(props, vars),
+	}
+	return index
+}
+
+func (ctx *analysisContext) refreshForNode(node sitter.Node, visited map[string]struct{}, props map[string][]TypeOccurrence, vars map[string]FunctionScope) bool {
+	for cur := node; !cur.IsNull(); cur = cur.Parent() {
+		typeName := cur.Type()
+		switch typeName {
+		case "program":
+			return false
+		case "namespace_use_declaration", "namespace_use_clause", "namespace_use_group":
+			return true
+		}
+
+		key := fmt.Sprintf("%s#%d", typeName, cur.StartByte())
+		if _, ok := visited[key]; ok {
+			continue
+		}
+		visited[key] = struct{}{}
+
+		switch typeName {
+		case "property_declaration":
+			ctx.refreshPropertyDeclaration(cur, props)
+		case "property_promotion_parameter":
+			ctx.refreshPropertyPromotion(cur, props)
+		case "method_declaration", "function_definition", "function_declaration":
+			ctx.refreshFunctionScope(cur, props, vars)
+		}
+	}
+	return false
 }

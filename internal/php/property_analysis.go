@@ -11,7 +11,7 @@ func (ctx *analysisContext) collectPropertyTypes() map[string][]TypeOccurrence {
 		return types
 	}
 
-	uses := ctx.collectNamespaceUses(root)
+	uses := ctx.uses
 	stack := []sitter.Node{root}
 
 	for len(stack) > 0 {
@@ -101,4 +101,53 @@ func (ctx *analysisContext) propertyTypeFromPromotion(node sitter.Node, uses map
 	}
 
 	return name, occ, true
+}
+
+func (ctx *analysisContext) refreshPropertyDeclaration(node sitter.Node, props map[string][]TypeOccurrence) {
+	start, end := node.StartPoint(), node.EndPoint()
+	prunePropertiesInLineRange(props, int(start.Row)+1, int(end.Row)+1)
+
+	updates := ctx.propertyTypesFromDeclaration(node, ctx.uses)
+	for name, occs := range updates {
+		if len(occs) == 0 {
+			delete(props, name)
+			continue
+		}
+		props[name] = occs
+	}
+}
+
+func (ctx *analysisContext) refreshPropertyPromotion(node sitter.Node, props map[string][]TypeOccurrence) {
+	start, end := node.StartPoint(), node.EndPoint()
+	prunePropertiesInLineRange(props, int(start.Row)+1, int(end.Row)+1)
+
+	name, occs, ok := ctx.propertyTypeFromPromotion(node, ctx.uses)
+	if !ok || len(occs) == 0 {
+		if name != "" {
+			delete(props, name)
+		}
+		return
+	}
+	props[name] = occs
+}
+
+func prunePropertiesInLineRange(props map[string][]TypeOccurrence, startLine, endLine int) {
+	for name, occs := range props {
+		filtered := occs[:0]
+		removed := false
+		for _, occ := range occs {
+			if occ.Line >= startLine && occ.Line <= endLine {
+				removed = true
+				continue
+			}
+			filtered = append(filtered, occ)
+		}
+		if removed {
+			if len(filtered) == 0 {
+				delete(props, name)
+			} else {
+				props[name] = filtered
+			}
+		}
+	}
 }
