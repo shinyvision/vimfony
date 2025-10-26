@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/stretchr/testify/require"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -95,13 +96,15 @@ func TestPHPRouterRouteNameCompletion(t *testing.T) {
 		"a_route": {
 			Name:       "a_route",
 			Parameters: []string{"some", "unborn_param_name"},
+			Controller: "",
 		},
 		"another_route": {
 			Name:       "another_route",
 			Parameters: []string{"foo"},
+			Controller: "",
 		},
 	}
-	pa.SetRoutes(routes)
+	pa.SetRoutes(&routes)
 
 	target := "$this->router->generate('a_route'"
 	offset := strings.Index(target, "'a_route'") + 1
@@ -133,9 +136,10 @@ func TestPHPRouterRouteCompletionForAssignedVariable(t *testing.T) {
 		"a_route": {
 			Name:       "a_route",
 			Parameters: []string{"some", "unborn_param_name"},
+			Controller: "",
 		},
 	}
-	pa.SetRoutes(routes)
+	pa.SetRoutes(&routes)
 
 	target := "$i = $assignedRouterToVariable->generate('a_route', ['some' => 'params'])"
 	offset := strings.Index(target, "'a_route'") + 1
@@ -166,9 +170,10 @@ func TestPHPRouterRouteCompletionForDocblockVariable(t *testing.T) {
 		"a_route": {
 			Name:       "a_route",
 			Parameters: []string{"some"},
+			Controller: "",
 		},
 	}
-	pa.SetRoutes(routes)
+	pa.SetRoutes(&routes)
 
 	target := "$j = $typeHintedRouter->generate('a_route', ['some' => 'params'])"
 	offset := strings.Index(target, "'a_route'") + 1
@@ -201,9 +206,10 @@ func TestPHPDefinitionForClassReference(t *testing.T) {
 		ServiceReferences: make(map[string]int),
 	}
 	an.SetContainerConfig(container)
-	an.SetPsr4Map(config.Psr4Map{
+	psr4 := config.Psr4Map{
 		"VendorNamespace\\": []string{"vendor"},
-	})
+	}
+	an.SetPsr4Map(&psr4)
 
 	require.NoError(t, an.Changed([]byte(content), nil))
 
@@ -233,9 +239,10 @@ func TestPHPDefinitionForServiceID(t *testing.T) {
 		ServiceReferences: make(map[string]int),
 	}
 	an.SetContainerConfig(container)
-	an.SetPsr4Map(config.Psr4Map{
+	psr4 := config.Psr4Map{
 		"VendorNamespace\\": []string{"vendor"},
-	})
+	}
+	an.SetPsr4Map(&psr4)
 
 	require.NoError(t, an.Changed([]byte(content), nil))
 
@@ -248,6 +255,102 @@ func TestPHPDefinitionForServiceID(t *testing.T) {
 
 	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
 	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
+}
+
+func TestPHPDefinitionForRouteControllerAction(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	an := NewPHPAnalyzer().(*phpAnalyzer)
+
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot:     mockRoot,
+		ServiceClasses:    make(map[string]string),
+		ServiceAliases:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
+	}
+	an.SetContainerConfig(container)
+	psr4 := config.Psr4Map{
+		"VendorNamespace\\": []string{"vendor"},
+	}
+	an.SetPsr4Map(&psr4)
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some"},
+			Controller: "VendorNamespace\\TestClass",
+			Action:     "index",
+		},
+	}
+	an.SetRoutes(&routes)
+
+	require.NoError(t, an.Changed(content, nil))
+
+	target := "$this->router->generate('a_route'"
+	offset := strings.Index(target, "'a_route'") + 1
+	pos := positionAfter(t, content, target, offset)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
+	expectedRange, ok := php.FindMethodRange(expectedPath, "index")
+	require.True(t, ok)
+	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
+	require.Equal(t, expectedRange, locs[0].Range)
+}
+
+func TestPHPDefinitionForRouteControllerInvokeFallback(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	an := NewPHPAnalyzer().(*phpAnalyzer)
+
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot: mockRoot,
+		ServiceClasses: map[string]string{
+			"test.controller": "VendorNamespace\\TestClass",
+		},
+		ServiceAliases:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
+	}
+	an.SetContainerConfig(container)
+	psr4 := config.Psr4Map{
+		"VendorNamespace\\": []string{"vendor"},
+	}
+	an.SetPsr4Map(&psr4)
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some"},
+			Controller: "test.controller",
+			Action:     "missingAction",
+		},
+	}
+	an.SetRoutes(&routes)
+
+	require.NoError(t, an.Changed(content, nil))
+
+	target := "$this->router->generate('a_route'"
+	offset := strings.Index(target, "'a_route'") + 1
+	pos := positionAfter(t, content, target, offset)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
+	invokeRange, ok := php.FindMethodRange(expectedPath, "__invoke")
+	require.True(t, ok)
+	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
+	require.Equal(t, invokeRange, locs[0].Range)
 }
 
 func TestPHPRouterCompletionForAbstractControllerHelpers(t *testing.T) {
@@ -269,7 +372,7 @@ func TestPHPRouterCompletionForAbstractControllerHelpers(t *testing.T) {
 			Parameters: []string{"foo"},
 		},
 	}
-	pa.SetRoutes(routes)
+	pa.SetRoutes(&routes)
 
 	targetGenerate := "$k = $this->generateUrl('a_route', ['some' => 'params']);"
 	offsetGenerate := strings.Index(targetGenerate, "'a_route'") + 1
@@ -309,9 +412,10 @@ func TestPHPRouterRouteParameterCompletion(t *testing.T) {
 		"a_route": {
 			Name:       "a_route",
 			Parameters: []string{"some", "unborn_param_name"},
+			Controller: "",
 		},
 	}
-	pa.SetRoutes(routes)
+	pa.SetRoutes(&routes)
 
 	target := "$this->router->generate('a_route', ['some' => 'params'])"
 	offset := strings.Index(target, "['some'") + len("['")
@@ -345,7 +449,7 @@ func TestPHPRouterRouteParameterCompletionWithoutArrow(t *testing.T) {
 			Parameters: []string{"some", "unborn_param_name"},
 		},
 	}
-	pa.SetRoutes(routes)
+	pa.SetRoutes(&routes)
 
 	target := "$this->router->generate('a_route', ['unborn_param_name'])"
 	offset := strings.Index(target, "['unborn_param_name") + len("['")
@@ -377,9 +481,10 @@ func TestPHPRouterRouteCompletionNotOfferedForNonRouter(t *testing.T) {
 		"a_route": {
 			Name:       "a_route",
 			Parameters: []string{"some"},
+			Controller: "",
 		},
 	}
-	pa.SetRoutes(routes)
+	pa.SetRoutes(&routes)
 
 	target := "$this->notARouter->generate('generating_something_that_is_not_a_route')"
 	offset := strings.Index(target, "('generating_something_that_is_not_a_route") + len("('")

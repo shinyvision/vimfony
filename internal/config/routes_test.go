@@ -18,10 +18,14 @@ func TestGetRoutesMap(t *testing.T) {
 		"_wdt": Route{
 			Name:       "_wdt",
 			Parameters: []string{"token"},
+			Controller: "web_profiler.controller.profiler",
+			Action:     "toolbarAction",
 		},
 		"app_foo_bar": Route{
 			Name:       "app_foo_bar",
 			Parameters: []string{"id"},
+			Controller: "App\\Foo\\BarController",
+			Action:     "index",
 		},
 	}
 

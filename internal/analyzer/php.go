@@ -299,16 +299,24 @@ func (a *phpAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *phpAnalyzer) SetRoutes(routes config.RoutesMap) {
+func (a *phpAnalyzer) SetRoutes(routes *config.RoutesMap) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.routes = routes
+	if routes == nil {
+		a.routes = nil
+		return
+	}
+	a.routes = *routes
 }
 
-func (a *phpAnalyzer) SetPsr4Map(psr4 config.Psr4Map) {
+func (a *phpAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.psr4 = psr4
+	if psr4 == nil {
+		a.psr4 = nil
+		return
+	}
+	a.psr4 = *psr4
 }
 
 func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
@@ -345,6 +353,10 @@ func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 
 	if container == nil {
 		return nil, nil
+	}
+
+	if locs, ok := a.resolveRouteDefinition(pos); ok {
+		return locs, nil
 	}
 
 	if twigPath, ok := twig.PathAt(content, pos); ok {
@@ -889,4 +901,74 @@ func (a *phpAnalyzer) resolveServiceDefinition(content string, pos protocol.Posi
 	}
 
 	return resolveServiceIDLocations(serviceID, container, psr4)
+}
+
+func (a *phpAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.Location, bool) {
+	a.mu.RLock()
+	container := a.container
+	psr4 := a.psr4
+	routes := a.routes
+	if container == nil || len(psr4) == 0 || len(routes) == 0 {
+		a.mu.RUnlock()
+		return nil, false
+	}
+	ctx, ok := a.phpRouteContextAt(pos)
+	if !ok || ctx.argIndex != 0 {
+		a.mu.RUnlock()
+		return nil, false
+	}
+	routeName := a.stringContent(ctx.strNode)
+	if routeName == "" {
+		routeName = a.phpRouteNameFromArgs(ctx.argsNode)
+	}
+	if routeName == "" {
+		a.mu.RUnlock()
+		return nil, false
+	}
+	route, ok := routes[routeName]
+	a.mu.RUnlock()
+	if !ok || route.Controller == "" {
+		return nil, false
+	}
+
+	controllerID := route.Controller
+	if resolved, ok := container.ResolveServiceId(controllerID); ok {
+		controllerID = resolved
+	}
+	className := normalizeFQN(controllerID)
+	if className == "" {
+		return nil, false
+	}
+
+	path, classRange, ok := php.Resolve(className, psr4, container.WorkspaceRoot)
+	if !ok {
+		return nil, false
+	}
+
+	uri := protocol.DocumentUri(utils.PathToURI(path))
+	method := route.Action
+	if method == "" {
+		method = "__invoke"
+	}
+
+	if methodRange, ok := php.FindMethodRange(path, method); ok {
+		return []protocol.Location{{
+			URI:   uri,
+			Range: methodRange,
+		}}, true
+	}
+
+	if !strings.EqualFold(method, "__invoke") {
+		if invokeRange, ok := php.FindMethodRange(path, "__invoke"); ok {
+			return []protocol.Location{{
+				URI:   uri,
+				Range: invokeRange,
+			}}, true
+		}
+	}
+
+	return []protocol.Location{{
+		URI:   uri,
+		Range: classRange,
+	}}, true
 }

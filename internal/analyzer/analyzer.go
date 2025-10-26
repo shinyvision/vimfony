@@ -32,10 +32,10 @@ type ContainerAware interface {
 
 // RoutesAware is an interface for analyzers that need access to routes
 type RoutesAware interface {
-	SetRoutes(routes config.RoutesMap)
+	SetRoutes(routes *config.RoutesMap)
 }
 
 // Psr4Aware is an interface for analyzers that need access to PSR-4 mappings
 type Psr4Aware interface {
-	SetPsr4Map(psr4 config.Psr4Map)
+	SetPsr4Map(psr4 *config.Psr4Map)
 }

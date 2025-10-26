@@ -276,10 +276,14 @@ func (a *xmlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *xmlAnalyzer) SetPsr4Map(psr4 config.Psr4Map) {
+func (a *xmlAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.psr4 = psr4
+	if psr4 == nil {
+		a.psr4 = nil
+		return
+	}
+	a.psr4 = *psr4
 }
 
 func (a *xmlAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {

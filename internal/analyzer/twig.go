@@ -248,10 +248,14 @@ func (a *twigAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *twigAnalyzer) SetRoutes(routes config.RoutesMap) {
+func (a *twigAnalyzer) SetRoutes(routes *config.RoutesMap) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.routes = routes
+	if routes == nil {
+		a.routes = nil
+		return
+	}
+	a.routes = *routes
 }
 
 func (a *twigAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {

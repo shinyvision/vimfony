@@ -84,9 +84,10 @@ func TestXMLAnalyzerOnDefinition(t *testing.T) {
 		ServiceReferences: make(map[string]int),
 	}
 	an.SetContainerConfig(container)
-	an.SetPsr4Map(config.Psr4Map{
+	psr4 := config.Psr4Map{
 		"VendorNamespace\\": []string{"vendor"},
-	})
+	}
+	an.SetPsr4Map(&psr4)
 	require.NoError(t, an.Changed([]byte(content), nil))
 
 	servicePos := positionAfter(t, []byte(content), "test.service", len("test"))

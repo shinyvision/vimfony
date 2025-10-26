@@ -38,8 +38,12 @@ func (a *yamlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *yamlAnalyzer) SetPsr4Map(psr4 config.Psr4Map) {
-	a.psr4 = psr4
+func (a *yamlAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
+	if psr4 == nil {
+		a.psr4 = nil
+		return
+	}
+	a.psr4 = *psr4
 }
 
 func (a *yamlAnalyzer) hasServicePrefix(pos protocol.Position) (bool, string) {

@@ -55,3 +55,34 @@ func Resolve(className string, psr4Map config.Psr4Map, workspaceRoot string) (st
 	}
 	return path, protocol.Range{}, true // Found file, but not class definition
 }
+
+func FindMethodRange(path, methodName string) (protocol.Range, bool) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return protocol.Range{}, false
+	}
+
+	methodPattern := regexp.MustCompile(`(?i)function\s+(` + regexp.QuoteMeta(methodName) + `)\s*\(`)
+	loc := methodPattern.FindStringSubmatchIndex(string(content))
+	if loc == nil || len(loc) < 4 {
+		return protocol.Range{}, false
+	}
+
+	start := loc[2]
+	end := loc[3]
+
+	text := string(content)
+	line := strings.Count(text[:start], "\n")
+	lastNewline := strings.LastIndex(text[:start], "\n")
+	startCol := start
+	endCol := end
+	if lastNewline >= 0 {
+		startCol = start - lastNewline - 1
+		endCol = end - lastNewline - 1
+	}
+
+	return protocol.Range{
+		Start: protocol.Position{Line: uint32(line), Character: uint32(startCol)},
+		End:   protocol.Position{Line: uint32(line), Character: uint32(endCol)},
+	}, true
+}
