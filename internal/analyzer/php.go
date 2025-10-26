@@ -13,6 +13,8 @@ import (
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
 	php "github.com/shinyvision/vimfony/internal/php"
+	"github.com/shinyvision/vimfony/internal/twig"
+	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -31,6 +33,7 @@ type phpAnalyzer struct {
 	analysisVersion     int64
 	lastAnalyzedVersion int64
 	dirtyRanges         []php.ByteRange
+	psr4                config.Psr4Map
 }
 
 type phpRouteCallCtx struct {
@@ -302,6 +305,12 @@ func (a *phpAnalyzer) SetRoutes(routes config.RoutesMap) {
 	a.routes = routes
 }
 
+func (a *phpAnalyzer) SetPsr4Map(psr4 config.Psr4Map) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.psr4 = psr4
+}
+
 func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -325,6 +334,40 @@ func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 	}
 
 	return items, nil
+}
+
+func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
+	a.mu.RLock()
+	content := string(a.content)
+	container := a.container
+	psr4 := a.psr4
+	a.mu.RUnlock()
+
+	if container == nil {
+		return nil, nil
+	}
+
+	if twigPath, ok := twig.PathAt(content, pos); ok {
+		if target, ok := twig.Resolve(twigPath, container); ok {
+			loc := protocol.Location{
+				URI:   protocol.DocumentUri(utils.PathToURI(target)),
+				Range: protocol.Range{},
+			}
+			return []protocol.Location{loc}, nil
+		}
+	}
+
+	if className, ok := php.PathAt(content, pos); ok {
+		if locs, ok := resolveClassLocations(className, container, psr4); ok {
+			return locs, nil
+		}
+	}
+
+	if locs, ok := a.resolveServiceDefinition(content, pos, container, psr4); ok {
+		return locs, nil
+	}
+
+	return nil, nil
 }
 
 func (a *phpAnalyzer) serviceCompletionItems(prefix string) []protocol.CompletionItem {
@@ -797,12 +840,53 @@ func canonicalRouterType(name string) (string, bool) {
 	return "", false
 }
 
-func normalizeFQN(name string) string {
-	name = strings.TrimSpace(strings.ReplaceAll(name, "\\\\", "\\"))
-	name = strings.TrimLeft(name, "?\\")
-	return name
-}
-
 func (a *phpAnalyzer) variableNameFromNode(node sitter.Node) string {
 	return php.VariableNameFromNode(node, a.content)
+}
+
+func (a *phpAnalyzer) resolveServiceDefinition(content string, pos protocol.Position, container *config.ContainerConfig, psr4 config.Psr4Map) ([]protocol.Location, bool) {
+	if container == nil || len(container.ServiceClasses) == 0 {
+		return nil, false
+	}
+	line, ok := lineAt(content, int(pos.Line))
+	if !ok || line == "" {
+		return nil, false
+	}
+	offset := int(pos.Character)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(line) {
+		offset = len(line)
+	}
+
+	isServiceChar := func(b byte) bool {
+		return (b >= 'a' && b <= 'z') ||
+			(b >= 'A' && b <= 'Z') ||
+			(b >= '0' && b <= '9') ||
+			b == '_' || b == '.' || b == '-' || b == '\\'
+	}
+
+	left, right := 0, 0
+	for {
+		if offset-left == 0 || !isServiceChar(line[offset-left-1]) {
+			break
+		}
+		left++
+	}
+	for {
+		if offset+right == len(line) || !isServiceChar(line[offset+right]) {
+			break
+		}
+		right++
+	}
+	if left == 0 && right == 0 {
+		return nil, false
+	}
+	serviceID := line[offset-left : offset+right]
+	if serviceID == "" {
+		return nil, false
+	}
+
+	return resolveServiceIDLocations(serviceID, container, psr4)
 }

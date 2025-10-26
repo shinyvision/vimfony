@@ -12,9 +12,10 @@ import (
 	tsxml "github.com/alexaandru/go-sitter-forest/xml"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	"github.com/shinyvision/vimfony/internal/twig"
+	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
-
 
 type xmlAnalyzer struct {
 	parser    *sitter.Parser
@@ -22,6 +23,7 @@ type xmlAnalyzer struct {
 	tree      *sitter.Tree
 	content   []byte
 	container *config.ContainerConfig
+	psr4      config.Psr4Map
 }
 
 func NewXMLAnalyzer() Analyzer {
@@ -274,6 +276,12 @@ func (a *xmlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
+func (a *xmlAnalyzer) SetPsr4Map(psr4 config.Psr4Map) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.psr4 = psr4
+}
+
 func (a *xmlAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -337,4 +345,59 @@ func (a *xmlAnalyzer) serviceCompletionItems(prefix string) []protocol.Completio
 	})
 
 	return items
+}
+
+func (a *xmlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
+	a.mu.RLock()
+	content := string(a.content)
+	container := a.container
+	psr4 := a.psr4
+	a.mu.RUnlock()
+
+	if container == nil {
+		return nil, nil
+	}
+
+	if twigPath, ok := twig.PathAt(content, pos); ok {
+		if target, ok := twig.Resolve(twigPath, container); ok {
+			loc := protocol.Location{
+				URI:   protocol.DocumentUri(utils.PathToURI(target)),
+				Range: protocol.Range{},
+			}
+			return []protocol.Location{loc}, nil
+		}
+	}
+
+	line, ok := lineAt(content, int(pos.Line))
+	if !ok || line == "" {
+		return nil, nil
+	}
+
+	identifier, _, _, ok := extractIdentifier(line, int(pos.Character), isServiceIdentifierWithAtRune)
+	if !ok {
+		return nil, nil
+	}
+	identifier = trimQuotes(strings.TrimSpace(identifier))
+	if identifier == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(identifier, "@") {
+		if locs, ok := resolveServiceIDLocations(strings.TrimPrefix(identifier, "@"), container, psr4); ok {
+			return locs, nil
+		}
+		identifier = strings.TrimPrefix(identifier, "@")
+	}
+
+	if strings.Contains(identifier, "\\") {
+		if locs, ok := resolveClassLocations(identifier, container, psr4); ok {
+			return locs, nil
+		}
+	}
+
+	if locs, ok := resolveServiceIDLocations(identifier, container, psr4); ok {
+		return locs, nil
+	}
+
+	return nil, nil
 }

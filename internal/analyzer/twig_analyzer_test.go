@@ -2,8 +2,12 @@ package analyzer
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/shinyvision/vimfony/internal/config"
+	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -164,4 +168,54 @@ func TestIsTypingRouteParameter(t *testing.T) {
 			assert.Equal(t, tc.expectedPrefix, prefix)
 		})
 	}
+}
+
+func TestTwigDefinitionForIncludePath(t *testing.T) {
+	tmpDir := t.TempDir()
+	targetPath := filepath.Join(tmpDir, "target.twig")
+	require.NoError(t, os.WriteFile(targetPath, []byte("{# stub #}"), 0o644))
+
+	content := "{{ include(\"target.twig\") }}"
+	an := NewTwigAnalyzer().(*twigAnalyzer)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot: tmpDir,
+		Roots:         []string{tmpDir},
+		BundleRoots:   make(map[string][]string),
+		TwigFunctions: make(map[string]protocol.Location),
+	}
+	an.SetContainerConfig(container)
+	require.NoError(t, an.Changed([]byte(content), nil))
+
+	offset := strings.Index(content, "target.twig") + 3
+	pos := protocol.Position{Line: 0, Character: uint32(offset)}
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+	require.Equal(t, protocol.DocumentUri(utils.PathToURI(targetPath)), locs[0].URI)
+}
+
+func TestTwigDefinitionForRegisteredFunction(t *testing.T) {
+	content := "{{ my_function(variable) }}"
+	an := NewTwigAnalyzer().(*twigAnalyzer)
+
+	container := &config.ContainerConfig{
+		TwigFunctions: map[string]protocol.Location{
+			"my_function": {
+				URI:   "file:///tmp/mock.php",
+				Range: protocol.Range{Start: protocol.Position{Line: 10}, End: protocol.Position{Line: 10, Character: 5}},
+			},
+		},
+	}
+	an.SetContainerConfig(container)
+	require.NoError(t, an.Changed([]byte(content), nil))
+
+	offset := strings.Index(content, "my_function") + 2
+	pos := protocol.Position{Line: 0, Character: uint32(offset)}
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.Len(t, locs, 1)
+	require.Equal(t, container.TwigFunctions["my_function"], locs[0])
 }

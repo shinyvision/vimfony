@@ -3,10 +3,12 @@ package analyzer
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/shinyvision/vimfony/internal/config"
+	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/stretchr/testify/require"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
@@ -182,6 +184,70 @@ func TestPHPRouterRouteCompletionForDocblockVariable(t *testing.T) {
 	}
 
 	require.Contains(t, labels, "a_route")
+}
+
+func TestPHPDefinitionForClassReference(t *testing.T) {
+	content := "<?php\n$cls = VendorNamespace\\TestClass::class;\n"
+
+	an := NewPHPAnalyzer().(*phpAnalyzer)
+
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot:     mockRoot,
+		ServiceClasses:    make(map[string]string),
+		ServiceAliases:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
+	}
+	an.SetContainerConfig(container)
+	an.SetPsr4Map(config.Psr4Map{
+		"VendorNamespace\\": []string{"vendor"},
+	})
+
+	require.NoError(t, an.Changed([]byte(content), nil))
+
+	classRef := "VendorNamespace\\TestClass"
+	pos := positionAfter(t, []byte(content), classRef, len(classRef)/2)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
+	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
+}
+
+func TestPHPDefinitionForServiceID(t *testing.T) {
+	content := "<?php\n$service = 'test.service';\n"
+
+	an := NewPHPAnalyzer().(*phpAnalyzer)
+
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot:     mockRoot,
+		ServiceClasses:    map[string]string{"test.service": "VendorNamespace\\TestClass"},
+		ServiceAliases:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
+	}
+	an.SetContainerConfig(container)
+	an.SetPsr4Map(config.Psr4Map{
+		"VendorNamespace\\": []string{"vendor"},
+	})
+
+	require.NoError(t, an.Changed([]byte(content), nil))
+
+	serviceRef := "test.service"
+	pos := positionAfter(t, []byte(content), serviceRef, len(serviceRef)/2)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
+	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
 }
 
 func TestPHPRouterCompletionForAbstractControllerHelpers(t *testing.T) {

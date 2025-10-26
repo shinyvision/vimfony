@@ -11,6 +11,8 @@ import (
 	twig "github.com/alexaandru/go-sitter-forest/twig"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	twiglib "github.com/shinyvision/vimfony/internal/twig"
+	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -250,6 +252,35 @@ func (a *twigAnalyzer) SetRoutes(routes config.RoutesMap) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.routes = routes
+}
+
+func (a *twigAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
+	a.mu.RLock()
+	content := string(a.content)
+	container := a.container
+	a.mu.RUnlock()
+
+	if container == nil {
+		return nil, nil
+	}
+
+	if twigPath, ok := twiglib.PathAt(content, pos); ok {
+		if target, ok := twiglib.Resolve(twigPath, container); ok {
+			loc := protocol.Location{
+				URI:   protocol.DocumentUri(utils.PathToURI(target)),
+				Range: protocol.Range{},
+			}
+			return []protocol.Location{loc}, nil
+		}
+	}
+
+	if functionName, ok := twiglib.FunctionAt(content, pos); ok {
+		if loc, ok := container.TwigFunctions[functionName]; ok {
+			return []protocol.Location{loc}, nil
+		}
+	}
+
+	return nil, nil
 }
 
 func (a *twigAnalyzer) routeContextAt(pos protocol.Position) (twigCallCtx, bool) {

@@ -7,12 +7,16 @@ import (
 
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	"github.com/shinyvision/vimfony/internal/twig"
+	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
 type yamlAnalyzer struct {
 	lines     []string
+	content   string
 	container *config.ContainerConfig
+	psr4      config.Psr4Map
 }
 
 func NewYamlAnalyzer() Analyzer {
@@ -20,16 +24,22 @@ func NewYamlAnalyzer() Analyzer {
 }
 
 func (a *yamlAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
-	a.lines = strings.Split(string(code), "\n")
+	a.content = string(code)
+	a.lines = strings.Split(a.content, "\n")
 	return nil
 }
 
 func (a *yamlAnalyzer) Close() {
 	a.lines = nil
+	a.content = ""
 }
 
 func (a *yamlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
+}
+
+func (a *yamlAnalyzer) SetPsr4Map(psr4 config.Psr4Map) {
+	a.psr4 = psr4
 }
 
 func (a *yamlAnalyzer) hasServicePrefix(pos protocol.Position) (bool, string) {
@@ -119,4 +129,55 @@ func (a *yamlAnalyzer) serviceCompletionItems(prefix string) []protocol.Completi
 	})
 
 	return items
+}
+
+func (a *yamlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
+	if a.container == nil {
+		return nil, nil
+	}
+
+	if twigPath, ok := twig.PathAt(a.content, pos); ok {
+		if target, ok := twig.Resolve(twigPath, a.container); ok {
+			loc := protocol.Location{
+				URI:   protocol.DocumentUri(utils.PathToURI(target)),
+				Range: protocol.Range{},
+			}
+			return []protocol.Location{loc}, nil
+		}
+	}
+
+	line, ok := lineAt(a.content, int(pos.Line))
+	if !ok || line == "" {
+		return nil, nil
+	}
+
+	token, _, _, ok := extractIdentifier(line, int(pos.Character), isServiceIdentifierWithAtRune)
+	if !ok {
+		return nil, nil
+	}
+	token = trimQuotes(strings.TrimSpace(token))
+	if token == "" {
+		return nil, nil
+	}
+
+	if strings.HasPrefix(token, "@") {
+		serviceID := strings.TrimPrefix(token, "@")
+		if locs, ok := resolveServiceIDLocations(serviceID, a.container, a.psr4); ok {
+			return locs, nil
+		}
+		// fall through to consider remainder for classes or aliases without '@'
+		token = serviceID
+	}
+
+	if strings.Contains(token, "\\") {
+		if locs, ok := resolveClassLocations(token, a.container, a.psr4); ok {
+			return locs, nil
+		}
+	}
+
+	if locs, ok := resolveServiceIDLocations(token, a.container, a.psr4); ok {
+		return locs, nil
+	}
+
+	return nil, nil
 }
