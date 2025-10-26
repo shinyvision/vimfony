@@ -57,7 +57,8 @@ func TestPHPPropertyTypeCollection(t *testing.T) {
 	require.NoError(t, analyzer.Changed(content, nil))
 
 	pa := analyzer.(*phpAnalyzer)
-	types := pa.index.Properties
+	idx := pa.indexSnapshot()
+	types := idx.Properties
 
 	expected := map[string][]string{
 		"urlGenerator":          {urlGeneratorFQN},
