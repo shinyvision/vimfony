@@ -26,6 +26,7 @@ type twigAnalyzer struct {
 	assignmentQuery   *sitter.Query
 	container         *config.ContainerConfig
 	routes            config.RoutesMap
+	psr4              config.Psr4Map
 }
 
 type twigCallCtx struct {
@@ -258,7 +259,21 @@ func (a *twigAnalyzer) SetRoutes(routes *config.RoutesMap) {
 	a.routes = *routes
 }
 
+func (a *twigAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if psr4 == nil {
+		a.psr4 = nil
+		return
+	}
+	a.psr4 = *psr4
+}
+
 func (a *twigAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
+	if locs, ok := a.resolveRouteDefinition(pos); ok {
+		return locs, nil
+	}
+
 	a.mu.RLock()
 	content := string(a.content)
 	container := a.container
@@ -285,6 +300,36 @@ func (a *twigAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location,
 	}
 
 	return nil, nil
+}
+
+func (a *twigAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.Location, bool) {
+	a.mu.RLock()
+	container := a.container
+	psr4 := a.psr4
+	routes := a.routes
+	if container == nil || len(psr4) == 0 || len(routes) == 0 {
+		a.mu.RUnlock()
+		return nil, false
+	}
+	ctx, ok := a.routeContextAt(pos)
+	if !ok || ctx.argIndex != 0 {
+		a.mu.RUnlock()
+		return nil, false
+	}
+	routeName := a.stringContent(ctx.strNode)
+	if routeName == "" {
+		routeName = a.firstArgRouteName(ctx.argsNode)
+	}
+	if routeName == "" {
+		a.mu.RUnlock()
+		return nil, false
+	}
+	route, ok := routes[routeName]
+	a.mu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	return resolveRouteLocations(route, container, psr4)
 }
 
 func (a *twigAnalyzer) routeContextAt(pos protocol.Position) (twigCallCtx, bool) {
@@ -369,6 +414,17 @@ func (a *twigAnalyzer) stringPrefix(str sitter.Node, pos protocol.Position) stri
 		}
 	}
 	return string(inner)
+}
+
+func (a *twigAnalyzer) stringContent(str sitter.Node) string {
+	if str.IsNull() {
+		return ""
+	}
+	sb, eb := int(str.StartByte()), int(str.EndByte())
+	if eb-sb < 2 {
+		return ""
+	}
+	return string(a.content[sb+1 : eb-1])
 }
 
 func (a *twigAnalyzer) firstArgRouteName(args sitter.Node) string {

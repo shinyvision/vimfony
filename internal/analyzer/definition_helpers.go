@@ -45,6 +45,58 @@ func resolveServiceIDLocations(serviceID string, container *config.ContainerConf
 	return resolveClassLocations(className, container, psr4)
 }
 
+func resolveRouteLocations(route config.Route, container *config.ContainerConfig, psr4 config.Psr4Map) ([]protocol.Location, bool) {
+	if container == nil || len(psr4) == 0 {
+		return nil, false
+	}
+
+	controllerID := route.Controller
+	if controllerID == "" {
+		return nil, false
+	}
+
+	if resolved, ok := container.ResolveServiceId(controllerID); ok {
+		controllerID = resolved
+	}
+
+	className := normalizeFQN(controllerID)
+	if className == "" {
+		return nil, false
+	}
+
+	path, classRange, ok := php.Resolve(className, psr4, container.WorkspaceRoot)
+	if !ok {
+		return nil, false
+	}
+
+	method := route.Action
+	if method == "" {
+		method = "__invoke"
+	}
+
+	uri := protocol.DocumentUri(utils.PathToURI(path))
+	if methodRange, ok := php.FindMethodRange(path, method); ok {
+		return []protocol.Location{{
+			URI:   uri,
+			Range: methodRange,
+		}}, true
+	}
+
+	if !strings.EqualFold(method, "__invoke") {
+		if invokeRange, ok := php.FindMethodRange(path, "__invoke"); ok {
+			return []protocol.Location{{
+				URI:   uri,
+				Range: invokeRange,
+			}}, true
+		}
+	}
+
+	return []protocol.Location{{
+		URI:   uri,
+		Range: classRange,
+	}}, true
+}
+
 func lineAt(content string, line int) (string, bool) {
 	if line < 0 {
 		return "", false

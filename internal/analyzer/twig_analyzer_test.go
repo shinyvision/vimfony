@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -218,4 +219,94 @@ func TestTwigDefinitionForRegisteredFunction(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, locs, 1)
 	require.Equal(t, container.TwigFunctions["my_function"], locs[0])
+}
+
+func TestTwigDefinitionForRouteControllerAction(t *testing.T) {
+	content := "{{ path('a_route') }}"
+	an := NewTwigAnalyzer().(*twigAnalyzer)
+
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot:     mockRoot,
+		ServiceClasses:    make(map[string]string),
+		ServiceAliases:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
+	}
+	an.SetContainerConfig(container)
+	psr4 := config.Psr4Map{
+		"VendorNamespace\\": []string{"vendor"},
+	}
+	an.SetPsr4Map(&psr4)
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Controller: "VendorNamespace\\TestClass",
+			Action:     "index",
+		},
+	}
+	an.SetRoutes(&routes)
+	require.NoError(t, an.Changed([]byte(content), nil))
+
+	start := strings.Index(content, "a_route")
+	require.NotEqual(t, -1, start)
+	idx := start + 2
+	pos := protocol.Position{Line: 0, Character: uint32(idx)}
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
+	expectedRange, ok := php.FindMethodRange(expectedPath, "index")
+	require.True(t, ok)
+	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
+	require.Equal(t, expectedRange, locs[0].Range)
+}
+
+func TestTwigDefinitionForRouteControllerInvokeFallback(t *testing.T) {
+	content := "{{ url('a_route') }}"
+	an := NewTwigAnalyzer().(*twigAnalyzer)
+
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot: mockRoot,
+		ServiceClasses: map[string]string{
+			"test.controller": "VendorNamespace\\TestClass",
+		},
+		ServiceAliases:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
+	}
+	an.SetContainerConfig(container)
+	psr4 := config.Psr4Map{
+		"VendorNamespace\\": []string{"vendor"},
+	}
+	an.SetPsr4Map(&psr4)
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Controller: "test.controller",
+			Action:     "missingAction",
+		},
+	}
+	an.SetRoutes(&routes)
+	require.NoError(t, an.Changed([]byte(content), nil))
+
+	start := strings.Index(content, "a_route")
+	require.NotEqual(t, -1, start)
+	idx := start + 2
+	pos := protocol.Position{Line: 0, Character: uint32(idx)}
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
+	invokeRange, ok := php.FindMethodRange(expectedPath, "__invoke")
+	require.True(t, ok)
+	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
+	require.Equal(t, invokeRange, locs[0].Range)
 }

@@ -931,44 +931,5 @@ func (a *phpAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.
 		return nil, false
 	}
 
-	controllerID := route.Controller
-	if resolved, ok := container.ResolveServiceId(controllerID); ok {
-		controllerID = resolved
-	}
-	className := normalizeFQN(controllerID)
-	if className == "" {
-		return nil, false
-	}
-
-	path, classRange, ok := php.Resolve(className, psr4, container.WorkspaceRoot)
-	if !ok {
-		return nil, false
-	}
-
-	uri := protocol.DocumentUri(utils.PathToURI(path))
-	method := route.Action
-	if method == "" {
-		method = "__invoke"
-	}
-
-	if methodRange, ok := php.FindMethodRange(path, method); ok {
-		return []protocol.Location{{
-			URI:   uri,
-			Range: methodRange,
-		}}, true
-	}
-
-	if !strings.EqualFold(method, "__invoke") {
-		if invokeRange, ok := php.FindMethodRange(path, "__invoke"); ok {
-			return []protocol.Location{{
-				URI:   uri,
-				Range: invokeRange,
-			}}, true
-		}
-	}
-
-	return []protocol.Location{{
-		URI:   uri,
-		Range: classRange,
-	}}, true
+	return resolveRouteLocations(route, container, psr4)
 }
