@@ -47,6 +47,7 @@ const (
 	urlGeneratorFQN          = "Symfony\\Component\\Routing\\Generator\\UrlGenerator"
 	routerInterfaceFQN       = "Symfony\\Component\\Routing\\RouterInterface"
 	routerFQN                = "Symfony\\Component\\Routing\\Router"
+	abstractControllerFQN    = "Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController"
 )
 
 const analysisDebounceInterval = 500 * time.Millisecond
@@ -476,7 +477,7 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 		}
 
 		nameNode := callNode.ChildByFieldName("name")
-		if nameNode.IsNull() || strings.TrimSpace(nameNode.Content(a.content)) != "generate" {
+		if nameNode.IsNull() {
 			return phpRouteCallCtx{}, false
 		}
 
@@ -485,12 +486,53 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 			return phpRouteCallCtx{}, false
 		}
 
-		callLine := int(callNode.StartPoint().Row) + 1
-		funcName := a.enclosingFunctionName(callNode)
+		methodName := strings.TrimSpace(nameNode.Content(a.content))
+		switch methodName {
+		case "generate":
+			callLine := int(callNode.StartPoint().Row) + 1
+			funcName := a.enclosingFunctionName(callNode)
 
-		propertyName := a.routerPropertyNameFromMemberAccess(objectNode)
-		if propertyName != "" {
-			if !a.propertyHasRouterType(propertyName) {
+			propertyName := a.routerPropertyNameFromMemberAccess(objectNode)
+			if propertyName != "" {
+				if !a.propertyHasRouterType(propertyName) {
+					return phpRouteCallCtx{}, false
+				}
+				if str.IsNull() {
+					return phpRouteCallCtx{}, false
+				}
+				return phpRouteCallCtx{
+					callNode: callNode,
+					argsNode: argsNode,
+					argIndex: argIndex,
+					strNode:  str,
+					property: propertyName,
+				}, true
+			}
+
+			if objectNode.Type() == "variable_name" {
+				varName := a.variableNameFromNode(objectNode)
+				if varName == "" {
+					return phpRouteCallCtx{}, false
+				}
+				if !a.variableHasRouterType(funcName, varName, callLine) {
+					return phpRouteCallCtx{}, false
+				}
+				if str.IsNull() {
+					return phpRouteCallCtx{}, false
+				}
+				return phpRouteCallCtx{
+					callNode: callNode,
+					argsNode: argsNode,
+					argIndex: argIndex,
+					strNode:  str,
+					variable: varName,
+				}, true
+			}
+		case "generateUrl", "redirectToRoute":
+			if !isThisVariable(objectNode, a.content) {
+				return phpRouteCallCtx{}, false
+			}
+			if !a.classExtendsAbstractController(callNode) {
 				return phpRouteCallCtx{}, false
 			}
 			if str.IsNull() {
@@ -501,28 +543,9 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 				argsNode: argsNode,
 				argIndex: argIndex,
 				strNode:  str,
-				property: propertyName,
 			}, true
-		}
-
-		if objectNode.Type() == "variable_name" {
-			varName := a.variableNameFromNode(objectNode)
-			if varName == "" {
-				return phpRouteCallCtx{}, false
-			}
-			if !a.variableHasRouterType(funcName, varName, callLine) {
-				return phpRouteCallCtx{}, false
-			}
-			if str.IsNull() {
-				return phpRouteCallCtx{}, false
-			}
-			return phpRouteCallCtx{
-				callNode: callNode,
-				argsNode: argsNode,
-				argIndex: argIndex,
-				strNode:  str,
-				variable: varName,
-			}, true
+		default:
+			return phpRouteCallCtx{}, false
 		}
 
 		return phpRouteCallCtx{}, false
@@ -675,6 +698,13 @@ func (a *phpAnalyzer) routerPropertyNameFromMemberAccess(node sitter.Node) strin
 	return strings.TrimSpace(nameNode.Content(a.content))
 }
 
+func isThisVariable(node sitter.Node, content []byte) bool {
+	if node.IsNull() || node.Type() != "variable_name" {
+		return false
+	}
+	return strings.TrimSpace(node.Content(content)) == "$this"
+}
+
 func (a *phpAnalyzer) propertyHasRouterType(name string) bool {
 	if len(a.index.Properties) == 0 {
 		return false
@@ -687,6 +717,29 @@ func (a *phpAnalyzer) propertyHasRouterType(name string) bool {
 		if _, ok := canonicalRouterType(occ.Type); ok {
 			return true
 		}
+	}
+	return false
+}
+
+func (a *phpAnalyzer) classExtendsAbstractController(node sitter.Node) bool {
+	target := strings.ToLower(normalizeFQN(abstractControllerFQN))
+	if target == "" {
+		return false
+	}
+	for cur := node; !cur.IsNull(); cur = cur.Parent() {
+		if cur.Type() != "class_declaration" {
+			continue
+		}
+		info, ok := a.index.Classes[uint32(cur.StartByte())]
+		if !ok {
+			return false
+		}
+		for _, ext := range info.Extends {
+			if strings.ToLower(normalizeFQN(ext)) == target {
+				return true
+			}
+		}
+		return false
 	}
 	return false
 }

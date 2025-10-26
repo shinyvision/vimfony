@@ -184,6 +184,52 @@ func TestPHPRouterRouteCompletionForDocblockVariable(t *testing.T) {
 	require.Contains(t, labels, "a_route")
 }
 
+func TestPHPRouterCompletionForAbstractControllerHelpers(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_router.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	routes := config.RoutesMap{
+		"a_route": {
+			Name:       "a_route",
+			Parameters: []string{"some", "unborn_param_name"},
+		},
+		"another_route": {
+			Name:       "another_route",
+			Parameters: []string{"foo"},
+		},
+	}
+	pa.SetRoutes(routes)
+
+	targetGenerate := "$k = $this->generateUrl('a_route', ['some' => 'params']);"
+	offsetGenerate := strings.Index(targetGenerate, "'a_route'") + 1
+	posGenerate := positionAfter(t, content, targetGenerate, offsetGenerate)
+
+	itemsGenerate, err := pa.OnCompletion(posGenerate)
+	require.NoError(t, err)
+	require.NotEmpty(t, itemsGenerate)
+
+	targetRedirect := "$i = $this->redirectToRoute('a_route', ['some' => 'params']);"
+	offsetRedirect := strings.Index(targetRedirect, "'a_route'") + 1
+	posRedirect := positionAfter(t, content, targetRedirect, offsetRedirect)
+
+	itemsRedirect, err := pa.OnCompletion(posRedirect)
+	require.NoError(t, err)
+	require.NotEmpty(t, itemsRedirect)
+
+	var labels []string
+	for _, item := range append(itemsGenerate, itemsRedirect...) {
+		labels = append(labels, item.Label)
+	}
+
+	require.Contains(t, labels, "a_route")
+	require.Contains(t, labels, "another_route")
+}
+
 func TestPHPRouterRouteParameterCompletion(t *testing.T) {
 	content, err := os.ReadFile("../../mock/class_with_router.php")
 	require.NoError(t, err)

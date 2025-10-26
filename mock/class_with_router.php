@@ -47,5 +47,9 @@ class ClassWithRouter extends AbstractController
 
         $i = $assignedRouterToVariable->generate('a_route', ['some' => 'params']);
         $j = $typeHintedRouter->generate('a_route', ['some' => 'params']);
+
+
+        $k = $this->generateUrl('a_route', ['some' => 'params']);
+        $i = $this->redirectToRoute('a_route', ['some' => 'params']);
     }
 }

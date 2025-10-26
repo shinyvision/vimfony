@@ -37,6 +37,15 @@ type FunctionScope struct {
 	EndLine   int
 }
 
+// ClassInfo describes a class declaration discovered in the file.
+type ClassInfo struct {
+	Name      string
+	Extends   []string
+	StartLine int
+	EndLine   int
+	StartByte uint32
+}
+
 // IndexedTree contains lightweight static analysis metadata for a PHP source file.
 // It tracks properties, the types discovered for them, and variables scoped to
 // functions or methods. A flattened type index is also provided for quick lookups.
@@ -44,6 +53,7 @@ type IndexedTree struct {
 	Properties map[string][]TypeOccurrence
 	Variables  map[string]FunctionScope
 	Types      map[string][]TypeReference
+	Classes    map[uint32]ClassInfo
 }
 
 // ByteRange represents a range of bytes in the source content.
@@ -142,6 +152,7 @@ func NewStaticAnalyzer() *StaticAnalyzer {
 			Properties: make(map[string][]TypeOccurrence),
 			Variables:  make(map[string]FunctionScope),
 			Types:      make(map[string][]TypeReference),
+			Classes:    make(map[uint32]ClassInfo),
 		},
 	}
 }
@@ -158,6 +169,7 @@ func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []Byte
 			Properties: make(map[string][]TypeOccurrence),
 			Variables:  make(map[string]FunctionScope),
 			Types:      make(map[string][]TypeReference),
+			Classes:    make(map[uint32]ClassInfo),
 		}
 		a.built = false
 		return a.index
@@ -166,10 +178,12 @@ func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []Byte
 	if !a.built || len(dirty) == 0 {
 		props := ctx.collectPropertyTypes()
 		vars := ctx.collectFunctionVariableTypes(props)
+		classes := ctx.collectClassInfo()
 		a.index = IndexedTree{
 			Properties: props,
 			Variables:  vars,
 			Types:      computeTypeReferences(props, vars),
+			Classes:    classes,
 		}
 		a.built = true
 		return a.index
@@ -177,8 +191,9 @@ func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []Byte
 
 	props := clonePropertyIndex(a.index.Properties)
 	vars := cloneFunctionIndex(a.index.Variables)
+	classes := cloneClassIndex(a.index.Classes)
 
-	index := ctx.updateIndex(props, vars, dirty)
+	index := ctx.updateIndex(props, vars, classes, dirty)
 	a.index = index
 	return a.index
 }
@@ -211,13 +226,30 @@ func cloneFunctionIndex(in map[string]FunctionScope) map[string]FunctionScope {
 	return out
 }
 
-func (ctx *analysisContext) updateIndex(props map[string][]TypeOccurrence, vars map[string]FunctionScope, dirty []ByteRange) IndexedTree {
+func cloneClassIndex(in map[uint32]ClassInfo) map[uint32]ClassInfo {
+	out := make(map[uint32]ClassInfo, len(in))
+	for k, v := range in {
+		extends := make([]string, len(v.Extends))
+		copy(extends, v.Extends)
+		out[k] = ClassInfo{
+			Name:      v.Name,
+			Extends:   extends,
+			StartLine: v.StartLine,
+			EndLine:   v.EndLine,
+			StartByte: v.StartByte,
+		}
+	}
+	return out
+}
+
+func (ctx *analysisContext) updateIndex(props map[string][]TypeOccurrence, vars map[string]FunctionScope, classes map[uint32]ClassInfo, dirty []ByteRange) IndexedTree {
 	root := ctx.rootNode()
 	if root.IsNull() {
 		return IndexedTree{
 			Properties: props,
 			Variables:  vars,
 			Types:      computeTypeReferences(props, vars),
+			Classes:    classes,
 		}
 	}
 
@@ -229,14 +261,16 @@ func (ctx *analysisContext) updateIndex(props map[string][]TypeOccurrence, vars 
 			start, end = end, start
 		}
 		node := root.NamedDescendantForByteRange(uint32(start), uint32(end))
-		if ctx.refreshForNode(node, visited, props, vars) {
+		if ctx.refreshForNode(node, visited, props, vars, classes) {
 			// Fallback to full rebuild when incremental update is insufficient.
 			freshProps := ctx.collectPropertyTypes()
 			freshVars := ctx.collectFunctionVariableTypes(freshProps)
+			freshClasses := ctx.collectClassInfo()
 			return IndexedTree{
 				Properties: freshProps,
 				Variables:  freshVars,
 				Types:      computeTypeReferences(freshProps, freshVars),
+				Classes:    freshClasses,
 			}
 		}
 	}
@@ -245,11 +279,12 @@ func (ctx *analysisContext) updateIndex(props map[string][]TypeOccurrence, vars 
 		Properties: props,
 		Variables:  vars,
 		Types:      computeTypeReferences(props, vars),
+		Classes:    classes,
 	}
 	return index
 }
 
-func (ctx *analysisContext) refreshForNode(node sitter.Node, visited map[string]struct{}, props map[string][]TypeOccurrence, vars map[string]FunctionScope) bool {
+func (ctx *analysisContext) refreshForNode(node sitter.Node, visited map[string]struct{}, props map[string][]TypeOccurrence, vars map[string]FunctionScope, classes map[uint32]ClassInfo) bool {
 	for cur := node; !cur.IsNull(); cur = cur.Parent() {
 		typeName := cur.Type()
 		switch typeName {
@@ -272,6 +307,8 @@ func (ctx *analysisContext) refreshForNode(node sitter.Node, visited map[string]
 			ctx.refreshPropertyPromotion(cur, props)
 		case "method_declaration", "function_definition", "function_declaration":
 			ctx.refreshFunctionScope(cur, props, vars)
+		case "class_declaration":
+			ctx.refreshClassDeclaration(cur, classes)
 		}
 	}
 	return false
