@@ -11,6 +11,7 @@ import (
 	twig "github.com/alexaandru/go-sitter-forest/twig"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	twiglib "github.com/shinyvision/vimfony/internal/twig"
 	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -27,6 +28,7 @@ type twigAnalyzer struct {
 	container         *config.ContainerConfig
 	routes            config.RoutesMap
 	psr4              config.Psr4Map
+	docStore          *php.DocumentStore
 }
 
 type twigCallCtx struct {
@@ -269,6 +271,12 @@ func (a *twigAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
 	a.psr4 = *psr4
 }
 
+func (a *twigAnalyzer) SetDocumentStore(store *php.DocumentStore) {
+	a.mu.Lock()
+	a.docStore = store
+	a.mu.Unlock()
+}
+
 func (a *twigAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
 	if locs, ok := a.resolveRouteDefinition(pos); ok {
 		return locs, nil
@@ -307,7 +315,8 @@ func (a *twigAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol
 	container := a.container
 	psr4 := a.psr4
 	routes := a.routes
-	if container == nil || len(psr4) == 0 || len(routes) == 0 {
+	store := a.docStore
+	if container == nil || len(psr4) == 0 || len(routes) == 0 || store == nil {
 		a.mu.RUnlock()
 		return nil, false
 	}
@@ -329,7 +338,15 @@ func (a *twigAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol
 	if !ok {
 		return nil, false
 	}
-	return resolveRouteLocations(route, container, psr4)
+	doc, uri, ok := routeDocument(route, container, psr4, store)
+	if !ok {
+		return nil, false
+	}
+	locs := resolveRouteLocations(route, uri, doc)
+	if len(locs) == 0 {
+		return nil, false
+	}
+	return locs, true
 }
 
 func (a *twigAnalyzer) routeContextAt(pos protocol.Position) (twigCallCtx, bool) {

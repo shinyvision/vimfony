@@ -45,28 +45,9 @@ func resolveServiceIDLocations(serviceID string, container *config.ContainerConf
 	return resolveClassLocations(className, container, psr4)
 }
 
-func resolveRouteLocations(route config.Route, container *config.ContainerConfig, psr4 config.Psr4Map) ([]protocol.Location, bool) {
-	if container == nil || len(psr4) == 0 {
-		return nil, false
-	}
-
-	controllerID := route.Controller
-	if controllerID == "" {
-		return nil, false
-	}
-
-	if resolved, ok := container.ResolveServiceId(controllerID); ok {
-		controllerID = resolved
-	}
-
-	className := normalizeFQN(controllerID)
-	if className == "" {
-		return nil, false
-	}
-
-	path, classRange, ok := php.Resolve(className, psr4, container.WorkspaceRoot)
-	if !ok {
-		return nil, false
+func resolveRouteLocations(route config.Route, uri string, doc *php.Document) []protocol.Location {
+	if doc == nil {
+		return nil
 	}
 
 	method := route.Action
@@ -74,27 +55,127 @@ func resolveRouteLocations(route config.Route, container *config.ContainerConfig
 		method = "__invoke"
 	}
 
-	uri := protocol.DocumentUri(utils.PathToURI(path))
-	if methodRange, ok := php.FindMethodRange(path, method); ok {
-		return []protocol.Location{{
-			URI:   uri,
-			Range: methodRange,
-		}}, true
+	index := doc.Index()
+	if len(index.PublicFunctions) == 0 {
+		return nil
 	}
 
-	if !strings.EqualFold(method, "__invoke") {
-		if invokeRange, ok := php.FindMethodRange(path, "__invoke"); ok {
-			return []protocol.Location{{
-				URI:   uri,
-				Range: invokeRange,
-			}}, true
+	candidates := []string{method}
+	if method != "__invoke" {
+		candidates = append(candidates, "__invoke")
+	}
+
+	for _, candidate := range candidates {
+		target := "::" + candidate
+		for _, publicMethod := range index.PublicFunctions {
+			if !strings.HasSuffix(publicMethod.Name, target) {
+				continue
+			}
+			if rng, ok := lineColumnRangeToProtocol(publicMethod.Range); ok {
+				resultURI := publicMethod.URI
+				if resultURI == "" {
+					resultURI = uri
+				}
+				if resultURI == "" {
+					continue
+				}
+				return []protocol.Location{{
+					URI:   protocol.DocumentUri(resultURI),
+					Range: rng,
+				}}
+			}
 		}
 	}
 
-	return []protocol.Location{{
-		URI:   uri,
-		Range: classRange,
-	}}, true
+	return nil
+}
+
+func routeDocument(route config.Route, container *config.ContainerConfig, psr4 config.Psr4Map, store *php.DocumentStore) (*php.Document, string, bool) {
+	if store == nil || container == nil || len(psr4) == 0 {
+		return nil, "", false
+	}
+	controllerID := route.Controller
+	if controllerID == "" {
+		return nil, "", false
+	}
+	className := controllerID
+	if resolved, ok := container.ResolveServiceId(controllerID); ok {
+		className = resolved
+	}
+	className = normalizeFQN(className)
+	if className == "" {
+		return nil, "", false
+	}
+	path, _, ok := php.Resolve(className, psr4, container.WorkspaceRoot)
+	if !ok {
+		return nil, "", false
+	}
+	doc, err := store.Get(path)
+	if err != nil {
+		return nil, "", false
+	}
+	return doc, utils.PathToURI(path), true
+}
+
+func indexedMethodRange(path, className, method string, doc *php.Document, store *php.DocumentStore) (protocol.Range, bool) {
+	analysisDoc := doc
+	if analysisDoc == nil && store != nil {
+		if loaded, err := store.Get(path); err == nil {
+			analysisDoc = loaded
+		}
+	}
+	if analysisDoc == nil {
+		return protocol.Range{}, false
+	}
+
+	index := analysisDoc.Index()
+	if len(index.PublicFunctions) == 0 {
+		return protocol.Range{}, false
+	}
+
+	prefix := className + "::"
+	target := prefix + method
+
+	for _, fn := range index.PublicFunctions {
+		if fn.Name == target {
+			if rng, ok := lineColumnRangeToProtocol(fn.Range); ok {
+				return rng, true
+			}
+		}
+	}
+
+	for _, fn := range index.PublicFunctions {
+		if strings.HasPrefix(fn.Name, prefix) {
+			if rng, ok := lineColumnRangeToProtocol(fn.Range); ok {
+				return rng, true
+			}
+		}
+	}
+
+	return protocol.Range{}, false
+}
+
+func lineColumnRangeToProtocol(r php.LineColumnRange) (protocol.Range, bool) {
+	if r.StartLine <= 0 && r.EndLine <= 0 {
+		return protocol.Range{}, false
+	}
+	startLine := max(r.StartLine-1, 0)
+	endLine := r.EndLine - 1
+	if endLine < 0 {
+		endLine = startLine
+	}
+	if r.EndLine == 0 && r.StartLine > 0 {
+		endLine = r.StartLine - 1
+	}
+	startCol := max(r.StartColumn, 0)
+	endCol := r.EndColumn
+	if endCol < 0 {
+		endCol = startCol
+	}
+	return protocol.Range{
+		Start: protocol.Position{Line: uint32(startLine), Character: uint32(startCol)},
+		End:   protocol.Position{Line: uint32(endLine), Character: uint32(endCol)},
+	}, true
 }
 
 func lineAt(content string, line int) (string, bool) {

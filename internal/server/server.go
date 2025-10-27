@@ -4,6 +4,7 @@ import (
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/analyzer"
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/tliron/commonlog"
@@ -17,15 +18,18 @@ const lsName = "vimfony"
 var version = "0.0.5"
 
 type Server struct {
-	config *config.Config
-	state  *state.State
-	h      protocol.Handler
+	config   *config.Config
+	state    *state.State
+	docStore *php.DocumentStore
+	h        protocol.Handler
 }
 
 func NewServer() *Server {
+	store := php.NewDocumentStore(1000)
 	s := &Server{
-		config: config.NewConfig(),
-		state:  state.NewState(),
+		config:   config.NewConfig(),
+		state:    state.NewState(store),
+		docStore: store,
 	}
 	s.h = protocol.Handler{
 		Initialize:             s.initialize,
@@ -104,6 +108,7 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 	s.config.LoadPsr4Map()
 	s.config.Container.LoadFromXML(s.config.Psr4)
 	s.config.LoadRoutesMap()
+	s.docStore.Configure(s.config.Psr4, s.config.Container.WorkspaceRoot)
 
 	logPathStats(s.config, "initialize")
 

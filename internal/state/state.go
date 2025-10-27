@@ -6,17 +6,23 @@ import (
 
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	protocol "github.com/tliron/glsp/protocol_3_16"
+
+	"github.com/shinyvision/vimfony/internal/analyzer"
+	php "github.com/shinyvision/vimfony/internal/php"
+	"github.com/shinyvision/vimfony/internal/utils"
 )
 
 // State manages the document state for the language server.
 type State struct {
-	mu   sync.RWMutex
-	docs map[protocol.DocumentUri]*Document
+	mu       sync.RWMutex
+	docs     map[protocol.DocumentUri]*Document
+	docStore *php.DocumentStore
 }
 
-func NewState() *State {
+func NewState(store *php.DocumentStore) *State {
 	return &State{
-		docs: make(map[protocol.DocumentUri]*Document),
+		docs:     make(map[protocol.DocumentUri]*Document),
+		docStore: store,
 	}
 }
 
@@ -39,6 +45,15 @@ func (s *State) SetDocument(uri protocol.DocumentUri, text string, languageID st
 		return
 	}
 	doc := NewDocument(languageID, text)
+	path := utils.UriToPath(string(uri))
+	if doc.Analyzer != nil {
+		if dsa, ok := doc.Analyzer.(analyzer.DocumentStoreAware); ok {
+			dsa.SetDocumentStore(s.docStore)
+		}
+		if dpa, ok := doc.Analyzer.(analyzer.DocumentPathAware); ok {
+			dpa.SetDocumentPath(path)
+		}
+	}
 	s.docs[uri] = doc
 	if doc.Analyzer != nil {
 		doc.Analyzer.Changed([]byte(text), nil)

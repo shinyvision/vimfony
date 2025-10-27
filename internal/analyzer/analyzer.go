@@ -3,6 +3,7 @@ package analyzer
 import (
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -38,4 +39,14 @@ type RoutesAware interface {
 // Psr4Aware is an interface for analyzers that need access to PSR-4 mappings
 type Psr4Aware interface {
 	SetPsr4Map(psr4 *config.Psr4Map)
+}
+
+// DocumentStoreAware allows analyzers to receive a shared PHP document store.
+type DocumentStoreAware interface {
+	SetDocumentStore(store *php.DocumentStore)
+}
+
+// DocumentPathAware allows analyzers to be informed of their source file path.
+type DocumentPathAware interface {
+	SetDocumentPath(path string)
 }

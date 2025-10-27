@@ -2,7 +2,7 @@
 
 namespace VendorNamespace;
 
-class TestClass
+class TestClass extends FooClass
 {
     public function index(): void
     {

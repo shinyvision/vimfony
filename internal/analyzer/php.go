@@ -2,6 +2,7 @@ package analyzer
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -23,7 +24,9 @@ type phpAnalyzer struct {
 	container      *config.ContainerConfig
 	routes         config.RoutesMap
 	doc            *php.Document
+	docStore       *php.DocumentStore
 	psr4           config.Psr4Map
+	path           string
 }
 
 type phpRouteCallCtx struct {
@@ -77,26 +80,36 @@ func (a *phpAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
 	if a.doc == nil {
 		a.doc = php.NewDocument()
 	}
-	return a.doc.Update(code, change)
+	if err := a.doc.Update(code, change); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	path := a.path
+	doc := a.doc
+	store := a.docStore
+	a.mu.Unlock()
+	if store != nil && doc != nil && path != "" {
+		store.RegisterOpen(path, doc)
+	}
+	return nil
 }
 
 func (a *phpAnalyzer) Close() {
-	if a.doc != nil {
-		a.doc.Close()
+	a.mu.Lock()
+	path := a.path
+	store := a.docStore
+	a.mu.Unlock()
+	if store != nil && path != "" {
+		store.Close(path)
 	}
-}
-
-func (a *phpAnalyzer) withDocument(fn func(tree *sitter.Tree, content []byte, index php.IndexedTree)) {
-	if a.doc == nil {
-		fn(nil, nil, php.IndexedTree{})
-		return
-	}
-	a.doc.Read(fn)
 }
 
 func (a *phpAnalyzer) indexSnapshot() php.IndexedTree {
+	if a.doc == nil {
+		return php.IndexedTree{}
+	}
 	var snapshot php.IndexedTree
-	a.withDocument(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
+	a.doc.Read(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
 		snapshot = index
 	})
 	return snapshot
@@ -112,7 +125,11 @@ func (a *phpAnalyzer) isInAutoconfigure(pos protocol.Position) (bool, string) {
 		prefix string
 	)
 
-	a.withDocument(func(tree *sitter.Tree, content []byte, _ php.IndexedTree) {
+	if a.doc == nil {
+		return false, ""
+	}
+
+	a.doc.Read(func(tree *sitter.Tree, content []byte, _ php.IndexedTree) {
 		if tree == nil || found {
 			return
 		}
@@ -179,8 +196,34 @@ func (a *phpAnalyzer) isInAutoconfigure(pos protocol.Position) (bool, string) {
 
 func (a *phpAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.container = container
+	doc := a.doc
+	a.mu.Unlock()
+	if doc != nil {
+		root := ""
+		if container != nil {
+			root = container.WorkspaceRoot
+		}
+		doc.SetWorkspaceRoot(root)
+	}
+}
+
+func (a *phpAnalyzer) SetDocumentPath(path string) {
+	clean := path
+	if clean != "" {
+		clean = filepath.Clean(clean)
+	}
+	a.mu.Lock()
+	a.path = clean
+	doc := a.doc
+	store := a.docStore
+	a.mu.Unlock()
+	if doc != nil && clean != "" {
+		doc.SetURI(utils.PathToURI(clean))
+	}
+	if store != nil && doc != nil && clean != "" {
+		store.RegisterOpen(clean, doc)
+	}
 }
 
 func (a *phpAnalyzer) SetRoutes(routes *config.RoutesMap) {
@@ -195,12 +238,32 @@ func (a *phpAnalyzer) SetRoutes(routes *config.RoutesMap) {
 
 func (a *phpAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if psr4 == nil {
 		a.psr4 = nil
+		doc := a.doc
+		a.mu.Unlock()
+		if doc != nil {
+			doc.SetPsr4Map(nil)
+		}
 		return
 	}
 	a.psr4 = *psr4
+	doc := a.doc
+	a.mu.Unlock()
+	if doc != nil {
+		doc.SetPsr4Map(a.psr4)
+	}
+}
+
+func (a *phpAnalyzer) SetDocumentStore(store *php.DocumentStore) {
+	a.mu.Lock()
+	a.docStore = store
+	path := a.path
+	doc := a.doc
+	a.mu.Unlock()
+	if store != nil && doc != nil && path != "" {
+		store.RegisterOpen(path, doc)
+	}
 }
 
 func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
@@ -230,9 +293,11 @@ func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 
 func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
 	var content string
-	a.withDocument(func(_ *sitter.Tree, data []byte, _ php.IndexedTree) {
-		content = string(data)
-	})
+	if a.doc != nil {
+		a.doc.Read(func(_ *sitter.Tree, data []byte, _ php.IndexedTree) {
+			content = string(data)
+		})
+	}
 
 	a.mu.RLock()
 	container := a.container
@@ -357,169 +422,149 @@ func (a *phpAnalyzer) isTypingPhpRouteParameter(pos protocol.Position) (bool, st
 }
 
 func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx, bool) {
-	var (
-		ctx phpRouteCallCtx
-		ok  bool
-	)
-	a.withDocument(func(tree *sitter.Tree, content []byte, index php.IndexedTree) {
-		if tree == nil || ok {
-			return
-		}
-		point, okPoint := lspPosToPoint(pos, content)
-		if !okPoint {
-			return
-		}
+	if a.doc == nil {
+		return phpRouteCallCtx{}, false
+	}
 
-		root := tree.RootNode()
-		if root.IsNull() {
-			return
-		}
+	node, content, index, ok := a.doc.GetNodeAt(pos)
+	if !ok {
+		return phpRouteCallCtx{}, false
+	}
 
-		controllerTarget := strings.ToLower(normalizeFQN(abstractControllerFQN))
-		if controllerTarget == "" {
-			return
-		}
+	controllerTarget := strings.ToLower(normalizeFQN(abstractControllerFQN))
+	if controllerTarget == "" {
+		return phpRouteCallCtx{}, false
+	}
 
-		node := root.NamedDescendantForPointRange(point, point)
-		if node.IsNull() {
-			return
-		}
-
-		var str sitter.Node
-		for cur := node; !cur.IsNull(); cur = cur.Parent() {
-			if str.IsNull() {
-				switch cur.Type() {
-				case "string":
-					str = cur
-				case "string_content":
-					parent := cur.Parent()
-					if !parent.IsNull() && parent.Type() == "string" {
-						str = parent
-					}
+	var str sitter.Node
+	for cur := node; !cur.IsNull(); cur = cur.Parent() {
+		if str.IsNull() {
+			switch cur.Type() {
+			case "string":
+				str = cur
+			case "string_content":
+				parent := cur.Parent()
+				if !parent.IsNull() && parent.Type() == "string" {
+					str = parent
 				}
 			}
+		}
 
-			if cur.Type() != "argument" {
-				continue
+		if cur.Type() != "argument" {
+			continue
+		}
+
+		argNode := cur
+		argsNode := argNode.Parent()
+		if argsNode.IsNull() || argsNode.Type() != "arguments" {
+			return phpRouteCallCtx{}, false
+		}
+
+		argIndex := -1
+		for i := uint32(0); i < argsNode.NamedChildCount(); i++ {
+			if argsNode.NamedChild(i).Equal(argNode) {
+				argIndex = int(i)
+				break
 			}
+		}
+		if argIndex < 0 {
+			return phpRouteCallCtx{}, false
+		}
 
-			argNode := cur
-			argsNode := argNode.Parent()
-			if argsNode.IsNull() || argsNode.Type() != "arguments" {
-				return
-			}
+		callNode := argsNode.Parent()
+		for !callNode.IsNull() && callNode.Type() != "member_call_expression" {
+			callNode = callNode.Parent()
+		}
+		if callNode.IsNull() || callNode.Type() != "member_call_expression" {
+			return phpRouteCallCtx{}, false
+		}
 
-			argIndex := -1
-			for i := uint32(0); i < argsNode.NamedChildCount(); i++ {
-				if argsNode.NamedChild(i).Equal(argNode) {
-					argIndex = int(i)
+		nameNode := callNode.ChildByFieldName("name")
+		if nameNode.IsNull() {
+			return phpRouteCallCtx{}, false
+		}
+
+		objectNode := callNode.ChildByFieldName("object")
+		if objectNode.IsNull() {
+			return phpRouteCallCtx{}, false
+		}
+
+		methodName := strings.TrimSpace(nameNode.Content(content))
+		switch methodName {
+		case "generate":
+			callLine := int(callNode.StartPoint().Row) + 1
+			funcName := ""
+			for candidate := callNode; !candidate.IsNull(); candidate = candidate.Parent() {
+				switch candidate.Type() {
+				case "method_declaration", "function_definition", "function_declaration":
+					funcName = functionIdentifierContent(content, candidate)
+					break
+				}
+				if funcName != "" {
 					break
 				}
 			}
-			if argIndex < 0 {
-				return
-			}
 
-			callNode := argsNode.Parent()
-			for !callNode.IsNull() && callNode.Type() != "member_call_expression" {
-				callNode = callNode.Parent()
-			}
-			if callNode.IsNull() || callNode.Type() != "member_call_expression" {
-				return
-			}
-
-			nameNode := callNode.ChildByFieldName("name")
-			if nameNode.IsNull() {
-				return
-			}
-
-			objectNode := callNode.ChildByFieldName("object")
-			if objectNode.IsNull() {
-				return
-			}
-
-			methodName := strings.TrimSpace(nameNode.Content(content))
-			switch methodName {
-			case "generate":
-				callLine := int(callNode.StartPoint().Row) + 1
-				funcName := ""
-				for candidate := callNode; !candidate.IsNull(); candidate = candidate.Parent() {
-					switch candidate.Type() {
-					case "method_declaration", "function_definition", "function_declaration":
-						funcName = functionIdentifierContent(content, candidate)
-						break
-					}
-					if funcName != "" {
-						break
-					}
-				}
-
-				propertyName := routerPropertyNameFromMemberAccessContent(content, objectNode)
-				if propertyName != "" {
-					if !propertyHasRouterTypeIndex(index, propertyName) {
-						return
-					}
-					if str.IsNull() {
-						return
-					}
-					ctx = phpRouteCallCtx{
-						callNode: callNode,
-						argsNode: argsNode,
-						argIndex: argIndex,
-						strNode:  str,
-						property: propertyName,
-					}
-					ok = true
-					return
-				}
-
-				if objectNode.Type() == "variable_name" {
-					varName := php.VariableNameFromNode(objectNode, content)
-					if varName == "" {
-						return
-					}
-					if !variableHasRouterTypeIndex(index, funcName, varName, callLine) {
-						return
-					}
-					if str.IsNull() {
-						return
-					}
-					ctx = phpRouteCallCtx{
-						callNode: callNode,
-						argsNode: argsNode,
-						argIndex: argIndex,
-						strNode:  str,
-						variable: varName,
-					}
-					ok = true
-					return
-				}
-			case "generateUrl", "redirectToRoute":
-				if !isThisVariable(objectNode, content) {
-					return
-				}
-				if !classExtendsAbstractControllerIndex(index, callNode, controllerTarget) {
-					return
+			propertyName := routerPropertyNameFromMemberAccessContent(content, objectNode)
+			if propertyName != "" {
+				if !propertyHasRouterTypeIndex(index, propertyName) {
+					return phpRouteCallCtx{}, false
 				}
 				if str.IsNull() {
-					return
+					return phpRouteCallCtx{}, false
 				}
-				ctx = phpRouteCallCtx{
+				return phpRouteCallCtx{
 					callNode: callNode,
 					argsNode: argsNode,
 					argIndex: argIndex,
 					strNode:  str,
-				}
-				ok = true
-				return
-			default:
-				return
+					property: propertyName,
+				}, true
 			}
 
-			return
+			if objectNode.Type() == "variable_name" {
+				varName := php.VariableNameFromNode(objectNode, content)
+				if varName == "" {
+					return phpRouteCallCtx{}, false
+				}
+				if !variableHasRouterTypeIndex(index, funcName, varName, callLine) {
+					return phpRouteCallCtx{}, false
+				}
+				if str.IsNull() {
+					return phpRouteCallCtx{}, false
+				}
+				return phpRouteCallCtx{
+					callNode: callNode,
+					argsNode: argsNode,
+					argIndex: argIndex,
+					strNode:  str,
+					variable: varName,
+				}, true
+			}
+		case "generateUrl", "redirectToRoute":
+			if !isThisVariable(objectNode, content) {
+				return phpRouteCallCtx{}, false
+			}
+			if !classExtendsAbstractControllerIndex(index, callNode, controllerTarget) {
+				return phpRouteCallCtx{}, false
+			}
+			if str.IsNull() {
+				return phpRouteCallCtx{}, false
+			}
+			return phpRouteCallCtx{
+				callNode: callNode,
+				argsNode: argsNode,
+				argIndex: argIndex,
+				strNode:  str,
+			}, true
+		default:
+			return phpRouteCallCtx{}, false
 		}
-	})
-	return ctx, ok
+
+		return phpRouteCallCtx{}, false
+	}
+
+	return phpRouteCallCtx{}, false
 }
 
 func (a *phpAnalyzer) phpRouteNameFromArgs(args sitter.Node) string {
@@ -574,7 +619,10 @@ func (a *phpAnalyzer) stringPrefix(str sitter.Node, pos protocol.Position) strin
 		return ""
 	}
 	var result string
-	a.withDocument(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
+	if a.doc == nil {
+		return ""
+	}
+	a.doc.Read(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
 		sb, eb := int(str.StartByte()), int(str.EndByte())
 		if eb-sb < 2 {
 			result = ""
@@ -600,7 +648,10 @@ func (a *phpAnalyzer) stringContent(str sitter.Node) string {
 		return ""
 	}
 	var result string
-	a.withDocument(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
+	if a.doc == nil {
+		return ""
+	}
+	a.doc.Read(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
 		if s >= 0 && e <= len(content) && s < e {
 			result = string(content[s:e])
 		}
@@ -657,7 +708,10 @@ func (a *phpAnalyzer) routerPropertyNameFromMemberAccess(node sitter.Node) strin
 	}
 
 	var result string
-	a.withDocument(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
+	if a.doc == nil {
+		return ""
+	}
+	a.doc.Read(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
 		result = routerPropertyNameFromMemberAccessContent(content, node)
 	})
 	return result
@@ -672,7 +726,10 @@ func isThisVariable(node sitter.Node, content []byte) bool {
 
 func (a *phpAnalyzer) propertyHasRouterType(name string) bool {
 	result := false
-	a.withDocument(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
+	if a.doc == nil {
+		return false
+	}
+	a.doc.Read(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
 		result = propertyHasRouterTypeIndex(index, name)
 	})
 	return result
@@ -684,7 +741,10 @@ func (a *phpAnalyzer) classExtendsAbstractController(node sitter.Node) bool {
 		return false
 	}
 	result := false
-	a.withDocument(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
+	if a.doc == nil {
+		return false
+	}
+	a.doc.Read(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
 		result = classExtendsAbstractControllerIndex(index, node, target)
 	})
 	return result
@@ -704,7 +764,10 @@ func (a *phpAnalyzer) functionIdentifier(node sitter.Node) string {
 	nameNode := node.ChildByFieldName("name")
 	if !nameNode.IsNull() {
 		var result string
-		a.withDocument(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
+		if a.doc == nil {
+			return ""
+		}
+		a.doc.Read(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
 			result = functionIdentifierContent(content, node)
 		})
 		return result
@@ -717,7 +780,10 @@ func (a *phpAnalyzer) variableHasRouterType(funcName, varName string, line int) 
 		return false
 	}
 	result := false
-	a.withDocument(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
+	if a.doc == nil {
+		return false
+	}
+	a.doc.Read(func(_ *sitter.Tree, _ []byte, index php.IndexedTree) {
 		result = variableHasRouterTypeIndex(index, funcName, varName, line)
 	})
 	return result
@@ -823,7 +889,10 @@ func variableHasRouterTypeIndex(index php.IndexedTree, funcName, varName string,
 
 func (a *phpAnalyzer) variableNameFromNode(node sitter.Node) string {
 	var result string
-	a.withDocument(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
+	if a.doc == nil {
+		return ""
+	}
+	a.doc.Read(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
 		result = php.VariableNameFromNode(node, content)
 	})
 	return result
@@ -881,7 +950,8 @@ func (a *phpAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.
 	container := a.container
 	psr4 := a.psr4
 	routes := a.routes
-	if container == nil || len(psr4) == 0 || len(routes) == 0 {
+	store := a.docStore
+	if container == nil || len(psr4) == 0 || len(routes) == 0 || store == nil {
 		a.mu.RUnlock()
 		return nil, false
 	}
@@ -904,5 +974,15 @@ func (a *phpAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.
 		return nil, false
 	}
 
-	return resolveRouteLocations(route, container, psr4)
+	doc, uri, ok := routeDocument(route, container, psr4, store)
+	if !ok {
+		return nil, false
+	}
+
+	locs := resolveRouteLocations(route, uri, doc)
+	if len(locs) == 0 {
+		return nil, false
+	}
+
+	return locs, true
 }

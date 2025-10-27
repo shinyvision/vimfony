@@ -210,6 +210,9 @@ func TestPHPDefinitionForClassReference(t *testing.T) {
 	psr4 := config.Psr4Map{
 		"VendorNamespace\\": []string{"vendor"},
 	}
+	store := php.NewDocumentStore(10)
+	store.Configure(psr4, mockRoot)
+	an.SetDocumentStore(store)
 	an.SetPsr4Map(&psr4)
 
 	require.NoError(t, an.Changed([]byte(content), nil))
@@ -243,6 +246,9 @@ func TestPHPDefinitionForServiceID(t *testing.T) {
 	psr4 := config.Psr4Map{
 		"VendorNamespace\\": []string{"vendor"},
 	}
+	store := php.NewDocumentStore(10)
+	store.Configure(psr4, mockRoot)
+	an.SetDocumentStore(store)
 	an.SetPsr4Map(&psr4)
 
 	require.NoError(t, an.Changed([]byte(content), nil))
@@ -277,6 +283,9 @@ func TestPHPDefinitionForRouteControllerAction(t *testing.T) {
 	psr4 := config.Psr4Map{
 		"VendorNamespace\\": []string{"vendor"},
 	}
+	store := php.NewDocumentStore(10)
+	store.Configure(psr4, mockRoot)
+	an.SetDocumentStore(store)
 	an.SetPsr4Map(&psr4)
 	routes := config.RoutesMap{
 		"a_route": {
@@ -287,6 +296,15 @@ func TestPHPDefinitionForRouteControllerAction(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
+	path, _, ok := php.Resolve("VendorNamespace\\TestClass", psr4, container.WorkspaceRoot)
+	if !ok {
+		t.Fatalf("php.Resolve failed (root=%s map=%v)", container.WorkspaceRoot, psr4)
+	}
+	_, err = store.Get(path)
+	require.NoError(t, err)
+	doc, uri, ok := routeDocument(routes["a_route"], container, psr4, store)
+	require.True(t, ok)
+	require.NotEmpty(t, resolveRouteLocations(routes["a_route"], uri, doc))
 
 	require.NoError(t, an.Changed(content, nil))
 
@@ -326,6 +344,9 @@ func TestPHPDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 	psr4 := config.Psr4Map{
 		"VendorNamespace\\": []string{"vendor"},
 	}
+	store := php.NewDocumentStore(10)
+	store.Configure(psr4, mockRoot)
+	an.SetDocumentStore(store)
 	an.SetPsr4Map(&psr4)
 	routes := config.RoutesMap{
 		"a_route": {
@@ -336,6 +357,13 @@ func TestPHPDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
+	path, _, ok := php.Resolve("VendorNamespace\\TestClass", psr4, container.WorkspaceRoot)
+	require.True(t, ok, "expected php.Resolve to succeed")
+	_, err = store.Get(path)
+	require.NoError(t, err)
+	doc, uri, ok := routeDocument(routes["a_route"], container, psr4, store)
+	require.True(t, ok)
+	require.NotEmpty(t, resolveRouteLocations(routes["a_route"], uri, doc))
 
 	require.NoError(t, an.Changed(content, nil))
 
