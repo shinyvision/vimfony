@@ -532,6 +532,55 @@ func TestPHPRouterRouteCompletionNotOfferedForNonRouter(t *testing.T) {
 	require.Nil(t, items)
 }
 
+func TestPHPTwigRenderTemplateCompletion(t *testing.T) {
+	content, err := os.ReadFile("../../mock/class_with_twig.php")
+	require.NoError(t, err)
+
+	analyzer := NewPHPAnalyzer()
+	require.NoError(t, analyzer.Changed(content, nil))
+
+	pa := analyzer.(*phpAnalyzer)
+
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	container := &config.ContainerConfig{
+		WorkspaceRoot:     mockRoot,
+		Roots:             []string{"."},
+		BundleRoots:       map[string][]string{"MyBundle": {filepath.Join(mockRoot, "bundles", "MyBundle", "views")}},
+		ServiceClasses:    make(map[string]string),
+		ServiceAliases:    make(map[string]string),
+		ServiceReferences: make(map[string]int),
+	}
+	pa.SetContainerConfig(container)
+
+	testCases := []struct {
+		needle string
+		offset int
+		label  string
+	}{
+		{"$view = $this->render('", len("$view = $this->render('"), "controller"},
+		{"$propView = $this->templating->render('", len("$propView = $this->templating->render('"), "property"},
+		{"$paramView = $environment->render('", len("$paramView = $environment->render('"), "parameter"},
+		{"$docblockView = $docblockEnvironment->render('", len("$docblockView = $docblockEnvironment->render('"), "docblock"},
+	}
+
+	for _, tc := range testCases {
+		pos := positionAfter(t, content, tc.needle, tc.offset)
+		items, err := pa.OnCompletion(pos)
+		require.NoErrorf(t, err, "completion error for %s context", tc.label)
+		require.NotEmptyf(t, items, "expected completion items for %s context", tc.label)
+
+		labels := make([]string, 0, len(items))
+		for _, item := range items {
+			labels = append(labels, item.Label)
+		}
+
+		require.Containsf(t, labels, "template.html.twig", "expected plain template suggestion for %s context", tc.label)
+		require.Containsf(t, labels, "@MyBundle/example.html.twig", "expected bundle template suggestion for %s context", tc.label)
+	}
+}
+
 func positionAfter(t *testing.T, content []byte, needle string, offset int) protocol.Position {
 	idx := bytes.Index(content, []byte(needle))
 	require.NotEqualf(t, -1, idx, "needle %q not found", needle)

@@ -44,6 +44,7 @@ const (
 	routerInterfaceFQN       = "Symfony\\Component\\Routing\\RouterInterface"
 	routerFQN                = "Symfony\\Component\\Routing\\Router"
 	abstractControllerFQN    = "Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController"
+	twigEnvironmentFQN       = "Twig\\Environment"
 )
 
 var routerCanonical = func() map[string]string {
@@ -279,6 +280,8 @@ func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 		}
 	}
 
+	items = append(items, a.twigTemplateCompletionItems(pos)...)
+
 	if len(a.routes) > 0 {
 		items = append(items, a.phpRouteNameCompletionItems(pos)...)
 		items = append(items, a.phpRouteParameterCompletionItems(pos)...)
@@ -393,6 +396,47 @@ func (a *phpAnalyzer) phpRouteParameterCompletionItems(pos protocol.Position) []
 	return makeRouteParameterCompletionItems(a.routes, routeName, prefix)
 }
 
+func (a *phpAnalyzer) twigTemplateCompletionItems(pos protocol.Position) []protocol.CompletionItem {
+	if a.container == nil {
+		return nil
+	}
+	strNode, ok := a.twigRenderContextAt(pos)
+	if !ok {
+		return nil
+	}
+
+	templates := a.container.TwigTemplates()
+	if len(templates) == 0 {
+		return nil
+	}
+
+	prefix := strings.ToLower(a.stringPrefix(strNode, pos))
+	kind := protocol.CompletionItemKindFile
+	detail := "Twig template"
+	seen := make(map[string]struct{}, len(templates))
+	items := make([]protocol.CompletionItem, 0, len(templates))
+
+	for _, tpl := range templates {
+		label := tpl
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(label), prefix) {
+			continue
+		}
+		if _, exists := seen[label]; exists {
+			continue
+		}
+		seen[label] = struct{}{}
+		labelCopy := label
+		detailCopy := detail
+		items = append(items, protocol.CompletionItem{
+			Label:  labelCopy,
+			Kind:   &kind,
+			Detail: &detailCopy,
+		})
+	}
+
+	return items
+}
+
 func (a *phpAnalyzer) isTypingPhpRouteName(pos protocol.Position) (bool, string) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -505,7 +549,7 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 				}
 			}
 
-			propertyName := routerPropertyNameFromMemberAccessContent(content, objectNode)
+			propertyName := thisPropertyNameFromMemberAccessContent(content, objectNode)
 			if propertyName != "" {
 				if !propertyHasRouterTypeIndex(index, propertyName) {
 					return phpRouteCallCtx{}, false
@@ -565,6 +609,120 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 	}
 
 	return phpRouteCallCtx{}, false
+}
+
+func (a *phpAnalyzer) twigRenderContextAt(pos protocol.Position) (sitter.Node, bool) {
+	if a.doc == nil {
+		return sitter.Node{}, false
+	}
+
+	node, content, index, ok := a.doc.GetNodeAt(pos)
+	if !ok {
+		return sitter.Node{}, false
+	}
+
+	var str sitter.Node
+	for cur := node; !cur.IsNull(); cur = cur.Parent() {
+		if str.IsNull() {
+			switch cur.Type() {
+			case "string":
+				str = cur
+			case "string_content":
+				parent := cur.Parent()
+				if !parent.IsNull() && parent.Type() == "string" {
+					str = parent
+				}
+			}
+		}
+
+		if cur.Type() != "argument" {
+			continue
+		}
+
+		argNode := cur
+		argsNode := argNode.Parent()
+		if argsNode.IsNull() || argsNode.Type() != "arguments" {
+			return sitter.Node{}, false
+		}
+
+		argIndex := -1
+		for i := uint32(0); i < argsNode.NamedChildCount(); i++ {
+			if argsNode.NamedChild(i).Equal(argNode) {
+				argIndex = int(i)
+				break
+			}
+		}
+		if argIndex != 0 {
+			return sitter.Node{}, false
+		}
+
+		callNode := argsNode.Parent()
+		for !callNode.IsNull() {
+			typ := callNode.Type()
+			if typ == "member_call_expression" || typ == "nullsafe_member_call_expression" {
+				break
+			}
+			callNode = callNode.Parent()
+		}
+		if callNode.IsNull() {
+			return sitter.Node{}, false
+		}
+
+		nameNode := callNode.ChildByFieldName("name")
+		if nameNode.IsNull() {
+			return sitter.Node{}, false
+		}
+		methodName := strings.TrimSpace(nameNode.Content(content))
+		if methodName != "render" {
+			return sitter.Node{}, false
+		}
+
+		objectNode := callNode.ChildByFieldName("object")
+		if objectNode.IsNull() || str.IsNull() {
+			return sitter.Node{}, false
+		}
+
+		callLine := int(callNode.StartPoint().Row) + 1
+		controllerTarget := strings.ToLower(normalizeFQN(abstractControllerFQN))
+
+		switch objectNode.Type() {
+		case "variable_name":
+			name := strings.TrimSpace(objectNode.Content(content))
+			if name == "$this" {
+				if controllerTarget == "" || !classExtendsAbstractControllerIndex(index, callNode, controllerTarget) {
+					return sitter.Node{}, false
+				}
+				return str, true
+			}
+
+			varName := php.VariableNameFromNode(objectNode, content)
+			if varName == "" {
+				return sitter.Node{}, false
+			}
+			funcName := a.enclosingFunctionName(callNode)
+			if funcName == "" {
+				return sitter.Node{}, false
+			}
+			if !variableHasTwigEnvironmentTypeIndex(index, funcName, varName, callLine) {
+				return sitter.Node{}, false
+			}
+			return str, true
+
+		case "member_access_expression", "nullsafe_member_access_expression":
+			propertyName := thisPropertyNameFromMemberAccessContent(content, objectNode)
+			if propertyName == "" {
+				return sitter.Node{}, false
+			}
+			if !propertyHasTwigEnvironmentTypeIndex(index, propertyName) {
+				return sitter.Node{}, false
+			}
+			return str, true
+		}
+
+		return sitter.Node{}, false
+	}
+
+	return sitter.Node{}, false
 }
 
 func (a *phpAnalyzer) phpRouteNameFromArgs(args sitter.Node) string {
@@ -696,27 +854,6 @@ func (a *phpAnalyzer) isPHPParamKeyContext(str sitter.Node) bool {
 	return false
 }
 
-func (a *phpAnalyzer) routerPropertyNameFromMemberAccess(node sitter.Node) string {
-	if node.IsNull() {
-		return ""
-	}
-
-	switch node.Type() {
-	case "member_access_expression", "nullsafe_member_access_expression":
-	default:
-		return ""
-	}
-
-	var result string
-	if a.doc == nil {
-		return ""
-	}
-	a.doc.Read(func(_ *sitter.Tree, content []byte, _ php.IndexedTree) {
-		result = routerPropertyNameFromMemberAccessContent(content, node)
-	})
-	return result
-}
-
 func isThisVariable(node sitter.Node, content []byte) bool {
 	if node.IsNull() || node.Type() != "variable_name" {
 		return false
@@ -803,7 +940,22 @@ func canonicalRouterType(name string) (string, bool) {
 	return "", false
 }
 
-func routerPropertyNameFromMemberAccessContent(content []byte, node sitter.Node) string {
+func canonicalTwigEnvironmentType(name string) (string, bool) {
+	normalized := normalizeFQN(name)
+	if normalized == "" {
+		return "", false
+	}
+	target := strings.ToLower(normalizeFQN(twigEnvironmentFQN))
+	if strings.ToLower(normalized) == target {
+		return twigEnvironmentFQN, true
+	}
+	if strings.ToLower(shortName(normalized)) == strings.ToLower(shortName(twigEnvironmentFQN)) {
+		return twigEnvironmentFQN, true
+	}
+	return "", false
+}
+
+func thisPropertyNameFromMemberAccessContent(content []byte, node sitter.Node) string {
 	objectNode := node.ChildByFieldName("object")
 	if objectNode.IsNull() {
 		return ""
@@ -826,7 +978,7 @@ func routerPropertyNameFromMemberAccessContent(content []byte, node sitter.Node)
 	return strings.TrimSpace(nameNode.Content(content))
 }
 
-func propertyHasRouterTypeIndex(index php.IndexedTree, name string) bool {
+func propertyHasTypeIndex(index php.IndexedTree, name string, canonical func(string) (string, bool)) bool {
 	if len(index.Properties) == 0 {
 		return false
 	}
@@ -835,11 +987,19 @@ func propertyHasRouterTypeIndex(index php.IndexedTree, name string) bool {
 		return false
 	}
 	for _, occ := range entries {
-		if _, ok := canonicalRouterType(occ.Type); ok {
+		if _, ok := canonical(occ.Type); ok {
 			return true
 		}
 	}
 	return false
+}
+
+func propertyHasRouterTypeIndex(index php.IndexedTree, name string) bool {
+	return propertyHasTypeIndex(index, name, canonicalRouterType)
+}
+
+func propertyHasTwigEnvironmentTypeIndex(index php.IndexedTree, name string) bool {
+	return propertyHasTypeIndex(index, name, canonicalTwigEnvironmentType)
 }
 
 func classExtendsAbstractControllerIndex(index php.IndexedTree, node sitter.Node, target string) bool {
@@ -869,7 +1029,7 @@ func functionIdentifierContent(content []byte, node sitter.Node) string {
 	return fmt.Sprintf("anonymous@%d", int(node.StartPoint().Row)+1)
 }
 
-func variableHasRouterTypeIndex(index php.IndexedTree, funcName, varName string, line int) bool {
+func variableHasTypeIndex(index php.IndexedTree, funcName, varName string, line int, canonical func(string) (string, bool)) bool {
 	scope, ok := index.Variables[funcName]
 	if !ok || scope.Variables == nil {
 		return false
@@ -880,11 +1040,19 @@ func variableHasRouterTypeIndex(index php.IndexedTree, funcName, varName string,
 	}
 	types := php.TypeNamesAtOrBefore(entries, line)
 	for _, typ := range types {
-		if _, ok := canonicalRouterType(typ); ok {
+		if _, ok := canonical(typ); ok {
 			return true
 		}
 	}
 	return false
+}
+
+func variableHasRouterTypeIndex(index php.IndexedTree, funcName, varName string, line int) bool {
+	return variableHasTypeIndex(index, funcName, varName, line, canonicalRouterType)
+}
+
+func variableHasTwigEnvironmentTypeIndex(index php.IndexedTree, funcName, varName string, line int) bool {
+	return variableHasTypeIndex(index, funcName, varName, line, canonicalTwigEnvironmentType)
 }
 
 func (a *phpAnalyzer) variableNameFromNode(node sitter.Node) string {

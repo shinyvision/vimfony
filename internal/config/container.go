@@ -3,10 +3,13 @@ package config
 import (
 	"bufio"
 	"encoding/xml"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/shinyvision/vimfony/internal/utils"
@@ -23,6 +26,9 @@ type ContainerConfig struct {
 	ServiceAliases    map[string]string
 	TwigFunctions     map[string]protocol.Location
 	ServiceReferences map[string]int
+	twigTemplates     []string
+	twigTemplateSig   string
+	twigMu            sync.Mutex
 }
 
 const targetServiceID = "twig.loader.native_filesystem"
@@ -74,6 +80,10 @@ func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 	c.ServiceAliases = make(map[string]string)
 	c.ServiceReferences = make(map[string]int)
 	c.TwigFunctions = make(map[string]protocol.Location)
+	c.twigMu.Lock()
+	c.twigTemplates = nil
+	c.twigTemplateSig = ""
+	c.twigMu.Unlock()
 
 	totalBare := 0
 	totalBundle := 0
@@ -408,4 +418,120 @@ func (c *ContainerConfig) ResolveServiceId(serviceID string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// TwigTemplates returns the set of twig template identifiers discovered from configured roots.
+func (c *ContainerConfig) TwigTemplates() []string {
+	c.twigMu.Lock()
+	defer c.twigMu.Unlock()
+
+	sig := c.twigTemplateSignature()
+	if sig == c.twigTemplateSig && c.twigTemplates != nil {
+		return append([]string(nil), c.twigTemplates...)
+	}
+
+	templates := c.collectTwigTemplates()
+	c.twigTemplates = templates
+	c.twigTemplateSig = sig
+	return append([]string(nil), templates...)
+}
+
+func (c *ContainerConfig) twigTemplateSignature() string {
+	roots := append([]string(nil), c.Roots...)
+	sort.Strings(roots)
+
+	bundleNames := make([]string, 0, len(c.BundleRoots))
+	for name := range c.BundleRoots {
+		bundleNames = append(bundleNames, name)
+	}
+	sort.Strings(bundleNames)
+
+	parts := make([]string, 0, 2+len(bundleNames))
+	parts = append(parts, "workspace:"+c.WorkspaceRoot)
+	parts = append(parts, "roots:"+strings.Join(roots, "|"))
+
+	for _, name := range bundleNames {
+		bases := append([]string(nil), c.BundleRoots[name]...)
+		sort.Strings(bases)
+		parts = append(parts, "bundle:"+name+"="+strings.Join(bases, "|"))
+	}
+
+	return strings.Join(parts, ";")
+}
+
+func (c *ContainerConfig) collectTwigTemplates() []string {
+	seen := make(map[string]struct{})
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		value = strings.ReplaceAll(value, "\\", "/")
+		if strings.HasPrefix(value, "./") {
+			value = value[2:]
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+	}
+
+	for _, root := range c.Roots {
+		base := root
+		if !filepath.IsAbs(base) {
+			base = filepath.Join(c.WorkspaceRoot, base)
+		}
+		walkTwigFiles(base, func(path string) {
+			rel, err := filepath.Rel(base, path)
+			if err != nil {
+				return
+			}
+			add(filepath.ToSlash(rel))
+		})
+	}
+
+	for bundle, bases := range c.BundleRoots {
+		if bundle == "" {
+			continue
+		}
+		for _, base := range bases {
+			abs := base
+			if !filepath.IsAbs(abs) {
+				abs = filepath.Join(c.WorkspaceRoot, abs)
+			}
+			walkTwigFiles(abs, func(path string) {
+				rel, err := filepath.Rel(abs, path)
+				if err != nil {
+					return
+				}
+				add("@" + bundle + "/" + filepath.ToSlash(rel))
+			})
+		}
+	}
+
+	templates := make([]string, 0, len(seen))
+	for value := range seen {
+		templates = append(templates, value)
+	}
+	sort.Strings(templates)
+	return templates
+}
+
+func walkTwigFiles(base string, fn func(path string)) {
+	info, err := os.Stat(base)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	filepath.WalkDir(base, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(strings.ToLower(d.Name()), ".twig") {
+			fn(path)
+		}
+		return nil
+	})
 }

@@ -25,7 +25,6 @@ These features are not yet implemented but would be useful:
 - `gd` Twig components
 - `gd` routes
 - Version checker & updater (`vimfony update`)
-- Figure out a way to split up the analysis being done in `internal/analyzer/php.go`
 
 ### Coming up
 Main should be up-to-date with the latest release, so you’re good to go! 🥳
