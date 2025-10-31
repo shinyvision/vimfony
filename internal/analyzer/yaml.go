@@ -16,7 +16,7 @@ type yamlAnalyzer struct {
 	lines     []string
 	content   string
 	container *config.ContainerConfig
-	psr4      config.Psr4Map
+	autoload  config.AutoloadMap
 }
 
 func NewYamlAnalyzer() Analyzer {
@@ -38,12 +38,12 @@ func (a *yamlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *yamlAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
+func (a *yamlAnalyzer) SetPsr4Map(psr4 *config.AutoloadMap) {
 	if psr4 == nil {
-		a.psr4 = nil
+		a.autoload = config.AutoloadMap{}
 		return
 	}
-	a.psr4 = *psr4
+	a.autoload = *psr4
 }
 
 func (a *yamlAnalyzer) hasServicePrefix(pos protocol.Position) (bool, string) {
@@ -166,7 +166,7 @@ func (a *yamlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location,
 
 	if strings.HasPrefix(token, "@") {
 		serviceID := strings.TrimPrefix(token, "@")
-		if locs, ok := resolveServiceIDLocations(serviceID, a.container, a.psr4); ok {
+		if locs, ok := resolveServiceIDLocations(serviceID, a.container, a.autoload); ok {
 			return locs, nil
 		}
 		// fall through to consider remainder for classes or aliases without '@'
@@ -174,12 +174,12 @@ func (a *yamlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location,
 	}
 
 	if strings.Contains(token, "\\") {
-		if locs, ok := resolveClassLocations(token, a.container, a.psr4); ok {
+		if locs, ok := resolveClassLocations(token, a.container, a.autoload); ok {
 			return locs, nil
 		}
 	}
 
-	if locs, ok := resolveServiceIDLocations(token, a.container, a.psr4); ok {
+	if locs, ok := resolveServiceIDLocations(token, a.container, a.autoload); ok {
 		return locs, nil
 	}
 

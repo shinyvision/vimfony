@@ -27,7 +27,7 @@ type twigAnalyzer struct {
 	assignmentQuery   *sitter.Query
 	container         *config.ContainerConfig
 	routes            config.RoutesMap
-	psr4              config.Psr4Map
+	autoload          config.AutoloadMap
 	docStore          *php.DocumentStore
 }
 
@@ -261,14 +261,14 @@ func (a *twigAnalyzer) SetRoutes(routes *config.RoutesMap) {
 	a.routes = *routes
 }
 
-func (a *twigAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
+func (a *twigAnalyzer) SetPsr4Map(psr4 *config.AutoloadMap) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if psr4 == nil {
-		a.psr4 = nil
+		a.autoload = config.AutoloadMap{}
 		return
 	}
-	a.psr4 = *psr4
+	a.autoload = *psr4
 }
 
 func (a *twigAnalyzer) SetDocumentStore(store *php.DocumentStore) {
@@ -313,10 +313,10 @@ func (a *twigAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location,
 func (a *twigAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.Location, bool) {
 	a.mu.RLock()
 	container := a.container
-	psr4 := a.psr4
+	autoload := a.autoload
 	routes := a.routes
 	store := a.docStore
-	if container == nil || len(psr4) == 0 || len(routes) == 0 || store == nil {
+	if container == nil || autoload.IsEmpty() || len(routes) == 0 || store == nil {
 		a.mu.RUnlock()
 		return nil, false
 	}
@@ -338,7 +338,7 @@ func (a *twigAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol
 	if !ok {
 		return nil, false
 	}
-	doc, uri, ok := routeDocument(route, container, psr4, store)
+	doc, uri, ok := routeDocument(route, container, autoload, store)
 	if !ok {
 		return nil, false
 	}

@@ -7,20 +7,28 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGetPsr4Map(t *testing.T) {
-	mockAutoloadFile, err := filepath.Abs("../../mock/autoload_psr4.php")
+func TestGetAutoloadMap(t *testing.T) {
+	psr4File, err := filepath.Abs("../../mock/autoload_psr4.php")
+	assert.NoError(t, err)
+	classmapFile, err := filepath.Abs("../../mock/autoload_classmap.php")
 	assert.NoError(t, err)
 
-	psr4Map, err := GetPsr4Map(mockAutoloadFile, "/usr/bin/php")
+	autoloadMap, err := GetAutoloadMap(psr4File, classmapFile, "/usr/bin/php")
 	assert.NoError(t, err)
 
 	mockDir, err := filepath.Abs("../../mock")
 	assert.NoError(t, err)
 
-	expected := Psr4Map{
-		"VendorNamespace\\": []string{filepath.Join(mockDir, "vendor")},
-		"BaseNamespace\\":   []string{filepath.Join(mockDir, "base")},
+	expected := AutoloadMap{
+		PSR4: map[string][]string{
+			"VendorNamespace\\": {filepath.Join(mockDir, "vendor")},
+			"BaseNamespace\\":   {filepath.Join(mockDir, "base")},
+		},
+		Classmap: map[string]string{
+			"VendorNamespace\\QuxClass": filepath.Join(filepath.Dir(mockDir), "QuxClass.php"),
+		},
 	}
 
-	assert.Equal(t, expected, psr4Map)
+	assert.Equal(t, expected.PSR4, autoloadMap.PSR4)
+	assert.Equal(t, expected.Classmap, autoloadMap.Classmap)
 }

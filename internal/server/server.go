@@ -105,10 +105,10 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 		}
 	}
 
-	s.config.LoadPsr4Map()
-	s.config.Container.LoadFromXML(s.config.Psr4)
+	s.config.LoadAutoloadMap()
+	s.config.Container.LoadFromXML(s.config.Autoload)
 	s.config.LoadRoutesMap()
-	s.docStore.Configure(s.config.Psr4, s.config.Container.WorkspaceRoot)
+	s.docStore.Configure(s.config.Autoload, s.config.Container.WorkspaceRoot)
 
 	logPathStats(s.config, "initialize")
 
@@ -138,7 +138,7 @@ func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams)
 				ca.SetContainerConfig(s.config.Container)
 			}
 			if pa, ok := doc.Analyzer.(analyzer.Psr4Aware); ok {
-				pa.SetPsr4Map(&s.config.Psr4)
+				pa.SetPsr4Map(&s.config.Autoload)
 			}
 			if ra, ok := doc.Analyzer.(analyzer.RoutesAware); ok {
 				ra.SetRoutes(&s.config.Routes)

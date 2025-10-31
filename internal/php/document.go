@@ -23,7 +23,7 @@ type Document struct {
 	content         []byte
 	docURI          string
 	workspaceRoot   string
-	psr4            config.Psr4Map
+	autoload        config.AutoloadMap
 	analyzer        *StaticAnalyzer
 	index           IndexedTree
 	dirtyRanges     []ByteRange
@@ -51,29 +51,29 @@ func NewDocument() *Document {
 
 // SetURI configures the document URI for downstream analysis.
 func (d *Document) SetURI(uri string) {
-	d.setContext(uri, d.workspaceRoot, d.psr4)
+	d.setContext(uri, d.workspaceRoot, d.autoload)
 }
 
 // SetWorkspaceRoot configures the workspace root used for path resolution.
 func (d *Document) SetWorkspaceRoot(root string) {
-	d.setContext(d.docURI, root, d.psr4)
+	d.setContext(d.docURI, root, d.autoload)
 }
 
-// SetPsr4Map assigns the PSR-4 map used during static analysis.
-func (d *Document) SetPsr4Map(psr4 config.Psr4Map) {
-	d.setContext(d.docURI, d.workspaceRoot, psr4)
+// SetPsr4Map assigns the Composer autoload map used during static analysis.
+func (d *Document) SetPsr4Map(autoload config.AutoloadMap) {
+	d.setContext(d.docURI, d.workspaceRoot, autoload)
 }
 
-func (d *Document) setContext(uri, root string, psr4 config.Psr4Map) {
+func (d *Document) setContext(uri, root string, autoload config.AutoloadMap) {
 	d.mu.Lock()
 	d.docURI = uri
 	d.workspaceRoot = root
-	d.psr4 = psr4
+	d.autoload = autoload
 	analyzer := d.analyzer
 	d.mu.Unlock()
 
 	if analyzer != nil {
-		analyzer.Configure(uri, psr4, root)
+		analyzer.Configure(uri, autoload, root)
 	}
 }
 

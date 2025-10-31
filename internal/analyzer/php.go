@@ -25,7 +25,7 @@ type phpAnalyzer struct {
 	routes         config.RoutesMap
 	doc            *php.Document
 	docStore       *php.DocumentStore
-	psr4           config.Psr4Map
+	autoload       config.AutoloadMap
 	path           string
 }
 
@@ -236,22 +236,22 @@ func (a *phpAnalyzer) SetRoutes(routes *config.RoutesMap) {
 	a.routes = *routes
 }
 
-func (a *phpAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
+func (a *phpAnalyzer) SetPsr4Map(psr4 *config.AutoloadMap) {
 	a.mu.Lock()
 	if psr4 == nil {
-		a.psr4 = nil
+		a.autoload = config.AutoloadMap{}
 		doc := a.doc
 		a.mu.Unlock()
 		if doc != nil {
-			doc.SetPsr4Map(nil)
+			doc.SetPsr4Map(config.AutoloadMap{})
 		}
 		return
 	}
-	a.psr4 = *psr4
+	a.autoload = *psr4
 	doc := a.doc
 	a.mu.Unlock()
 	if doc != nil {
-		doc.SetPsr4Map(a.psr4)
+		doc.SetPsr4Map(a.autoload)
 	}
 }
 
@@ -301,7 +301,7 @@ func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 
 	a.mu.RLock()
 	container := a.container
-	psr4 := a.psr4
+	autoload := a.autoload
 	a.mu.RUnlock()
 
 	if container == nil {
@@ -323,12 +323,12 @@ func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 	}
 
 	if className, ok := php.PathAt(content, pos); ok {
-		if locs, ok := resolveClassLocations(className, container, psr4); ok {
+		if locs, ok := resolveClassLocations(className, container, autoload); ok {
 			return locs, nil
 		}
 	}
 
-	if locs, ok := a.resolveServiceDefinition(content, pos, container, psr4); ok {
+	if locs, ok := a.resolveServiceDefinition(content, pos, container, autoload); ok {
 		return locs, nil
 	}
 
@@ -898,7 +898,7 @@ func (a *phpAnalyzer) variableNameFromNode(node sitter.Node) string {
 	return result
 }
 
-func (a *phpAnalyzer) resolveServiceDefinition(content string, pos protocol.Position, container *config.ContainerConfig, psr4 config.Psr4Map) ([]protocol.Location, bool) {
+func (a *phpAnalyzer) resolveServiceDefinition(content string, pos protocol.Position, container *config.ContainerConfig, autoload config.AutoloadMap) ([]protocol.Location, bool) {
 	if container == nil || len(container.ServiceClasses) == 0 {
 		return nil, false
 	}
@@ -942,16 +942,16 @@ func (a *phpAnalyzer) resolveServiceDefinition(content string, pos protocol.Posi
 		return nil, false
 	}
 
-	return resolveServiceIDLocations(serviceID, container, psr4)
+	return resolveServiceIDLocations(serviceID, container, autoload)
 }
 
 func (a *phpAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.Location, bool) {
 	a.mu.RLock()
 	container := a.container
-	psr4 := a.psr4
+	autoload := a.autoload
 	routes := a.routes
 	store := a.docStore
-	if container == nil || len(psr4) == 0 || len(routes) == 0 || store == nil {
+	if container == nil || autoload.IsEmpty() || len(routes) == 0 || store == nil {
 		a.mu.RUnlock()
 		return nil, false
 	}
@@ -974,7 +974,7 @@ func (a *phpAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.
 		return nil, false
 	}
 
-	doc, uri, ok := routeDocument(route, container, psr4, store)
+	doc, uri, ok := routeDocument(route, container, autoload, store)
 	if !ok {
 		return nil, false
 	}

@@ -135,16 +135,16 @@ func computeTypeReferences(properties map[string][]TypeOccurrence, functions map
 }
 
 type analysisContext struct {
-	content *[]byte
-	tree    *sitter.Tree
-	uses    map[string]string
-	uri     string
-	psr4    config.Psr4Map
-	root    string
-	loaded  map[string]externalClassData
+	content  *[]byte
+	tree     *sitter.Tree
+	uses     map[string]string
+	uri      string
+	autoload config.AutoloadMap
+	root     string
+	loaded   map[string]externalClassData
 }
 
-func newAnalysisContext(content *[]byte, tree *sitter.Tree, uri string, psr4 config.Psr4Map, workspaceRoot string) *analysisContext {
+func newAnalysisContext(content *[]byte, tree *sitter.Tree, uri string, autoload config.AutoloadMap, workspaceRoot string) *analysisContext {
 	if content == nil || tree == nil {
 		return nil
 	}
@@ -153,12 +153,12 @@ func newAnalysisContext(content *[]byte, tree *sitter.Tree, uri string, psr4 con
 		return nil
 	}
 	ctx := &analysisContext{
-		content: content,
-		tree:    tree,
-		uri:     uri,
-		psr4:    psr4,
-		root:    workspaceRoot,
-		loaded:  make(map[string]externalClassData),
+		content:  content,
+		tree:     tree,
+		uri:      uri,
+		autoload: autoload,
+		root:     workspaceRoot,
+		loaded:   make(map[string]externalClassData),
 	}
 	ctx.uses = ctx.collectNamespaceUses(ctx.rootNode())
 	return ctx
@@ -180,12 +180,12 @@ func (ctx *analysisContext) rootNode() sitter.Node {
 
 // StaticAnalyzer incrementally maintains an IndexedTree for a PHP source file.
 type StaticAnalyzer struct {
-	mu      sync.Mutex
-	index   IndexedTree
-	psr4Map config.Psr4Map
-	uri     string
-	root    string
-	built   bool
+	mu       sync.Mutex
+	index    IndexedTree
+	autoload config.AutoloadMap
+	uri      string
+	root     string
+	built    bool
 }
 
 // NewStaticAnalyzer constructs an analyzer with an empty index.
@@ -204,11 +204,11 @@ func NewStaticAnalyzer() *StaticAnalyzer {
 }
 
 // Configure sets metadata consumed by the analyzer when producing function information.
-func (a *StaticAnalyzer) Configure(uri string, psr4 config.Psr4Map, workspaceRoot string) {
+func (a *StaticAnalyzer) Configure(uri string, autoload config.AutoloadMap, workspaceRoot string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.uri = uri
-	a.psr4Map = psr4
+	a.autoload = autoload
 	a.root = workspaceRoot
 	a.applyURIToFunctionsLocked()
 }
@@ -219,7 +219,7 @@ func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []Byte
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	ctx := newAnalysisContext(content, tree, a.uri, a.psr4Map, a.root)
+	ctx := newAnalysisContext(content, tree, a.uri, a.autoload, a.root)
 	if ctx == nil {
 		a.index = IndexedTree{
 			Properties:         make(map[string][]TypeOccurrence),
@@ -659,7 +659,7 @@ func (ctx *analysisContext) externalExtendsFor(fqcn string) []string {
 
 func (ctx *analysisContext) ensureExternalClassLoaded(fqcn string) externalClassData {
 	fqcn = normalizeFQN(fqcn)
-	if fqcn == "" || ctx.psr4 == nil {
+	if fqcn == "" || ctx.autoload.IsEmpty() {
 		return externalClassData{}
 	}
 	if ctx.loaded == nil {
@@ -668,7 +668,7 @@ func (ctx *analysisContext) ensureExternalClassLoaded(fqcn string) externalClass
 	if data, ok := ctx.loaded[fqcn]; ok {
 		return data
 	}
-	path, ok := config.Psr4Resolve(fqcn, ctx.psr4, ctx.root)
+	path, ok := config.AutoloadResolve(fqcn, ctx.autoload, ctx.root)
 	if !ok {
 		ctx.loaded[fqcn] = externalClassData{}
 		return ctx.loaded[fqcn]
@@ -690,7 +690,7 @@ func (ctx *analysisContext) ensureExternalClassLoaded(fqcn string) externalClass
 
 	copyBytes := append([]byte(nil), dataBytes...)
 	uri := utils.PathToURI(path)
-	extCtx := newAnalysisContext(&copyBytes, tree, uri, ctx.psr4, ctx.root)
+	extCtx := newAnalysisContext(&copyBytes, tree, uri, ctx.autoload, ctx.root)
 	if extCtx == nil {
 		ctx.loaded[fqcn] = externalClassData{}
 		return ctx.loaded[fqcn]

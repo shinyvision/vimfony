@@ -15,15 +15,15 @@ func normalizeFQN(name string) string {
 	return name
 }
 
-func resolveClassLocations(className string, container *config.ContainerConfig, psr4 config.Psr4Map) ([]protocol.Location, bool) {
-	if container == nil || len(psr4) == 0 {
+func resolveClassLocations(className string, container *config.ContainerConfig, autoload config.AutoloadMap) ([]protocol.Location, bool) {
+	if container == nil || autoload.IsEmpty() {
 		return nil, false
 	}
 	className = normalizeFQN(className)
 	if className == "" {
 		return nil, false
 	}
-	target, classRange, ok := php.Resolve(className, psr4, container.WorkspaceRoot)
+	target, classRange, ok := php.Resolve(className, autoload, container.WorkspaceRoot)
 	if !ok {
 		return nil, false
 	}
@@ -34,7 +34,7 @@ func resolveClassLocations(className string, container *config.ContainerConfig, 
 	return []protocol.Location{loc}, true
 }
 
-func resolveServiceIDLocations(serviceID string, container *config.ContainerConfig, psr4 config.Psr4Map) ([]protocol.Location, bool) {
+func resolveServiceIDLocations(serviceID string, container *config.ContainerConfig, autoload config.AutoloadMap) ([]protocol.Location, bool) {
 	if container == nil {
 		return nil, false
 	}
@@ -42,7 +42,7 @@ func resolveServiceIDLocations(serviceID string, container *config.ContainerConf
 	if !ok {
 		return nil, false
 	}
-	return resolveClassLocations(className, container, psr4)
+	return resolveClassLocations(className, container, autoload)
 }
 
 func resolveRouteLocations(route config.Route, uri string, doc *php.Document) []protocol.Location {
@@ -90,8 +90,8 @@ func resolveRouteLocations(route config.Route, uri string, doc *php.Document) []
 	return nil
 }
 
-func routeDocument(route config.Route, container *config.ContainerConfig, psr4 config.Psr4Map, store *php.DocumentStore) (*php.Document, string, bool) {
-	if store == nil || container == nil || len(psr4) == 0 {
+func routeDocument(route config.Route, container *config.ContainerConfig, autoload config.AutoloadMap, store *php.DocumentStore) (*php.Document, string, bool) {
+	if store == nil || container == nil || autoload.IsEmpty() {
 		return nil, "", false
 	}
 	controllerID := route.Controller
@@ -106,7 +106,7 @@ func routeDocument(route config.Route, container *config.ContainerConfig, psr4 c
 	if className == "" {
 		return nil, "", false
 	}
-	path, _, ok := php.Resolve(className, psr4, container.WorkspaceRoot)
+	path, _, ok := php.Resolve(className, autoload, container.WorkspaceRoot)
 	if !ok {
 		return nil, "", false
 	}

@@ -36,9 +36,9 @@ type RoutesAware interface {
 	SetRoutes(routes *config.RoutesMap)
 }
 
-// Psr4Aware is an interface for analyzers that need access to PSR-4 mappings
+// Psr4Aware is an interface for analyzers that need access to Composer autoload mappings.
 type Psr4Aware interface {
-	SetPsr4Map(psr4 *config.Psr4Map)
+	SetPsr4Map(psr4 *config.AutoloadMap)
 }
 
 // DocumentStoreAware allows analyzers to receive a shared PHP document store.

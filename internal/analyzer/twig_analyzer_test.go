@@ -235,13 +235,15 @@ func TestTwigDefinitionForRouteControllerAction(t *testing.T) {
 		ServiceReferences: make(map[string]int),
 	}
 	an.SetContainerConfig(container)
-	psr4 := config.Psr4Map{
-		"VendorNamespace\\": []string{"vendor"},
+	autoload := config.AutoloadMap{
+		PSR4: map[string][]string{
+			"VendorNamespace\\": {"vendor"},
+		},
 	}
 	store := php.NewDocumentStore(10)
-	store.Configure(psr4, mockRoot)
+	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&psr4)
+	an.SetPsr4Map(&autoload)
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",
@@ -250,11 +252,11 @@ func TestTwigDefinitionForRouteControllerAction(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
-	path, _, ok := php.Resolve("VendorNamespace\\TestClass", psr4, container.WorkspaceRoot)
+	path, _, ok := php.Resolve("VendorNamespace\\TestClass", autoload, container.WorkspaceRoot)
 	require.True(t, ok, "expected php.Resolve to succeed")
 	_, err = store.Get(path)
 	require.NoError(t, err)
-	doc, uri, ok := routeDocument(routes["a_route"], container, psr4, store)
+	doc, uri, ok := routeDocument(routes["a_route"], container, autoload, store)
 	require.True(t, ok)
 	require.NotEmpty(t, resolveRouteLocations(routes["a_route"], uri, doc))
 	require.NoError(t, an.Changed([]byte(content), nil))
@@ -291,13 +293,15 @@ func TestTwigDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 		ServiceReferences: make(map[string]int),
 	}
 	an.SetContainerConfig(container)
-	psr4 := config.Psr4Map{
-		"VendorNamespace\\": []string{"vendor"},
+	autoload := config.AutoloadMap{
+		PSR4: map[string][]string{
+			"VendorNamespace\\": {"vendor"},
+		},
 	}
 	store := php.NewDocumentStore(10)
-	store.Configure(psr4, mockRoot)
+	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&psr4)
+	an.SetPsr4Map(&autoload)
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",
@@ -306,11 +310,11 @@ func TestTwigDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
-	path, _, ok := php.Resolve("VendorNamespace\\TestClass", psr4, container.WorkspaceRoot)
+	path, _, ok := php.Resolve("VendorNamespace\\TestClass", autoload, container.WorkspaceRoot)
 	require.True(t, ok)
 	_, err = store.Get(path)
 	require.NoError(t, err)
-	doc, uri, ok := routeDocument(routes["a_route"], container, psr4, store)
+	doc, uri, ok := routeDocument(routes["a_route"], container, autoload, store)
 	require.True(t, ok)
 	require.NotEmpty(t, resolveRouteLocations(routes["a_route"], uri, doc))
 	require.NoError(t, an.Changed([]byte(content), nil))

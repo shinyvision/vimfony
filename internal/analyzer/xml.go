@@ -23,7 +23,7 @@ type xmlAnalyzer struct {
 	tree      *sitter.Tree
 	content   []byte
 	container *config.ContainerConfig
-	psr4      config.Psr4Map
+	autoload  config.AutoloadMap
 }
 
 func NewXMLAnalyzer() Analyzer {
@@ -276,14 +276,14 @@ func (a *xmlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *xmlAnalyzer) SetPsr4Map(psr4 *config.Psr4Map) {
+func (a *xmlAnalyzer) SetPsr4Map(psr4 *config.AutoloadMap) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if psr4 == nil {
-		a.psr4 = nil
+		a.autoload = config.AutoloadMap{}
 		return
 	}
-	a.psr4 = *psr4
+	a.autoload = *psr4
 }
 
 func (a *xmlAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
@@ -355,7 +355,7 @@ func (a *xmlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 	a.mu.RLock()
 	content := string(a.content)
 	container := a.container
-	psr4 := a.psr4
+	autoload := a.autoload
 	a.mu.RUnlock()
 
 	if container == nil {
@@ -387,19 +387,19 @@ func (a *xmlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 	}
 
 	if strings.HasPrefix(identifier, "@") {
-		if locs, ok := resolveServiceIDLocations(strings.TrimPrefix(identifier, "@"), container, psr4); ok {
+		if locs, ok := resolveServiceIDLocations(strings.TrimPrefix(identifier, "@"), container, autoload); ok {
 			return locs, nil
 		}
 		identifier = strings.TrimPrefix(identifier, "@")
 	}
 
 	if strings.Contains(identifier, "\\") {
-		if locs, ok := resolveClassLocations(identifier, container, psr4); ok {
+		if locs, ok := resolveClassLocations(identifier, container, autoload); ok {
 			return locs, nil
 		}
 	}
 
-	if locs, ok := resolveServiceIDLocations(identifier, container, psr4); ok {
+	if locs, ok := resolveServiceIDLocations(identifier, container, autoload); ok {
 		return locs, nil
 	}
 

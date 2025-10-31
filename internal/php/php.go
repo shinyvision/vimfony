@@ -28,8 +28,8 @@ func PathAt(content string, pos protocol.Position) (string, bool) {
 	return "", false
 }
 
-func Resolve(className string, psr4Map config.Psr4Map, workspaceRoot string) (string, protocol.Range, bool) {
-	path, ok := config.Psr4Resolve(className, psr4Map, workspaceRoot)
+func Resolve(className string, autoloadMap config.AutoloadMap, workspaceRoot string) (string, protocol.Range, bool) {
+	path, ok := config.AutoloadResolve(className, autoloadMap, workspaceRoot)
 	if !ok {
 
 		return "", protocol.Range{}, false

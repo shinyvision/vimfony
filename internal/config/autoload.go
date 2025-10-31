@@ -9,31 +9,74 @@ import (
 	"strings"
 )
 
-type Psr4Map map[string][]string
+type AutoloadMap struct {
+	PSR4     map[string][]string
+	Classmap map[string]string
+}
 
-func GetPsr4Map(autoloadFile, phpPath string) (Psr4Map, error) {
-	// It is important to use the absolute path to the file, otherwise php will not find it.
+func NewAutoloadMap() AutoloadMap {
+	return AutoloadMap{
+		PSR4:     make(map[string][]string),
+		Classmap: make(map[string]string),
+	}
+}
+
+func (m AutoloadMap) IsEmpty() bool {
+	return len(m.PSR4) == 0 && len(m.Classmap) == 0
+}
+
+func GetAutoloadMap(psr4File, classmapFile, phpPath string) (AutoloadMap, error) {
+	result := NewAutoloadMap()
+
+	if psr4File != "" {
+		if err := loadAutoloadSection(psr4File, phpPath, &result.PSR4); err != nil {
+			return AutoloadMap{}, fmt.Errorf("could not load psr4 map: %w", err)
+		}
+	}
+
+	if classmapFile != "" {
+		if err := loadAutoloadSection(classmapFile, phpPath, &result.Classmap); err != nil {
+			return AutoloadMap{}, fmt.Errorf("could not load classmap: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+func loadAutoloadSection(autoloadFile, phpPath string, target any) error {
+	data, err := executeAutoloadPHP(autoloadFile, phpPath)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("could not unmarshal json: %w", err)
+	}
+	return nil
+}
+
+func executeAutoloadPHP(autoloadFile, phpPath string) ([]byte, error) {
 	absAutoloadFile, err := filepath.Abs(autoloadFile)
 	if err != nil {
 		return nil, fmt.Errorf("could not get absolute path for %s: %w", autoloadFile, err)
 	}
 
-	cmd := exec.Command(phpPath, "-r", fmt.Sprintf("echo json_encode(require '%s');", absAutoloadFile))
+	// The PHP code strips out unsafe keys.
+	cmd := exec.Command(phpPath, "-r", fmt.Sprintf("$scm=[];$cm=require'%s';foreach($cm as $k=>$v){$j=json_encode([$k=>$v]);if(is_string($j))$scm[$k]=$v;}echo json_encode($scm);", absAutoloadFile))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("could not execute php script: %w", err)
 	}
-
-	var psr4Map Psr4Map
-	if err := json.Unmarshal(out, &psr4Map); err != nil {
-		return nil, fmt.Errorf("could not unmarshal json: %w", err)
-	}
-
-	return psr4Map, nil
+	return out, nil
 }
 
-func Psr4Resolve(className string, psr4Map Psr4Map, workspaceRoot string) (string, bool) {
-	for namespace, paths := range psr4Map {
+func AutoloadResolve(className string, autoloadMap AutoloadMap, workspaceRoot string) (string, bool) {
+	if path, ok := autoloadMap.Classmap[className]; ok {
+		if resolved, ok := resolveClassmapPath(path, workspaceRoot); ok {
+			return resolved, true
+		}
+	}
+
+	for namespace, paths := range autoloadMap.PSR4 {
 		if strings.HasPrefix(className, namespace) {
 			for _, path := range paths {
 				relPath := strings.Replace(className, namespace, "", 1)
@@ -52,5 +95,16 @@ func Psr4Resolve(className string, psr4Map Psr4Map, workspaceRoot string) (strin
 		}
 	}
 
+	return "", false
+}
+
+func resolveClassmapPath(path, workspaceRoot string) (string, bool) {
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(workspaceRoot, path)
+	}
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate, true
+	}
 	return "", false
 }

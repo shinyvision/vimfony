@@ -8,7 +8,7 @@ import (
 
 type Config struct {
 	Container *ContainerConfig
-	Psr4      Psr4Map
+	Autoload  AutoloadMap
 	Routes    RoutesMap
 	VendorDir string
 	PhpPath   string
@@ -17,32 +17,40 @@ type Config struct {
 func NewConfig() *Config {
 	return &Config{
 		Container: NewContainerConfig(),
-		Psr4:      make(Psr4Map),
+		Autoload:  NewAutoloadMap(),
 		Routes:    make(RoutesMap),
 		PhpPath:   "php",
 	}
 }
 
-func (c *Config) LoadPsr4Map() {
+func (c *Config) LoadAutoloadMap() {
 	logger := commonlog.GetLoggerf("vimfony.config")
 	if c.VendorDir == "" {
 		return
 	}
 
-	autoloadFile := filepath.Join(c.VendorDir, "composer", "autoload_psr4.php")
-	absPath := autoloadFile
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(c.Container.WorkspaceRoot, absPath)
+	psr4File := filepath.Join(c.VendorDir, "composer", "autoload_psr4.php")
+	classmapFile := filepath.Join(c.VendorDir, "composer", "autoload_classmap.php")
+
+	if !filepath.IsAbs(psr4File) {
+		psr4File = filepath.Join(c.Container.WorkspaceRoot, psr4File)
+	}
+	if !filepath.IsAbs(classmapFile) {
+		classmapFile = filepath.Join(c.Container.WorkspaceRoot, classmapFile)
 	}
 
-	psr4Map, err := GetPsr4Map(absPath, c.PhpPath)
+	autoloadMap, err := GetAutoloadMap(psr4File, classmapFile, c.PhpPath)
 	if err != nil {
-		logger.Warningf("could not load psr4 map: %v", err)
+		logger.Warningf("could not load autoload map: %v", err)
 		return
 	}
 
-	c.Psr4 = psr4Map
-	logger.Infof("loaded %d psr-4 mappings", len(c.Psr4))
+	c.Autoload = autoloadMap
+	logger.Infof(
+		"loaded %d psr-4 mappings and %d classmap entries",
+		len(c.Autoload.PSR4),
+		len(c.Autoload.Classmap),
+	)
 }
 
 func (c *Config) LoadRoutesMap() {

@@ -64,7 +64,7 @@ func (c *ContainerConfig) SetContainerXMLPaths(paths []string) {
 }
 
 // Populates the Config.
-func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
+func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 	logger := commonlog.GetLoggerf("vimfony.config")
 	if len(c.ContainerXMLPaths) == 0 {
 		return
@@ -90,7 +90,7 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 			absPath = filepath.Join(c.WorkspaceRoot, absPath)
 		}
 
-		stats, err := c.loadContainerXML(absPath, psr4Map)
+		stats, err := c.loadContainerXML(absPath, autoloadMap)
 		if err != nil {
 			logger.Warningf("cannot read container_xml_path[%d] '%s': %v", idx, relPath, err)
 			continue
@@ -117,7 +117,7 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 	)
 }
 
-func (c *ContainerConfig) loadContainerXML(absPath string, psr4Map Psr4Map) (containerLoadStats, error) {
+func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadMap) (containerLoadStats, error) {
 	logger := commonlog.GetLoggerf("vimfony.config")
 	stats := containerLoadStats{
 		bundlesTouched: make(map[string]struct{}),
@@ -207,7 +207,7 @@ func (c *ContainerConfig) loadContainerXML(absPath string, psr4Map Psr4Map) (con
 					}
 				}
 				if name == "twig.extension" && serviceID != "" && serviceClass != "" {
-					c.indexTwigFunctions(serviceClass, psr4Map)
+					c.indexTwigFunctions(serviceClass, autoloadMap)
 				}
 			} else if serviceDepth > 0 && local == "argument" {
 				isServiceArg := false
@@ -328,9 +328,9 @@ func (c *ContainerConfig) loadContainerXML(absPath string, psr4Map Psr4Map) (con
 	return stats, nil
 }
 
-func (c *ContainerConfig) indexTwigFunctions(class string, psr4Map Psr4Map) {
+func (c *ContainerConfig) indexTwigFunctions(class string, autoloadMap AutoloadMap) {
 	logger := commonlog.GetLoggerf("vimfony.config")
-	path, ok := Psr4Resolve(class, psr4Map, c.WorkspaceRoot)
+	path, ok := AutoloadResolve(class, autoloadMap, c.WorkspaceRoot)
 	if !ok {
 		return
 	}
