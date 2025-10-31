@@ -243,7 +243,7 @@ func TestTwigDefinitionForRouteControllerAction(t *testing.T) {
 	store := php.NewDocumentStore(10)
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&autoload)
+	an.SetAutoloadMap(&autoload)
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",
@@ -301,7 +301,7 @@ func TestTwigDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 	store := php.NewDocumentStore(10)
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&autoload)
+	an.SetAutoloadMap(&autoload)
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",

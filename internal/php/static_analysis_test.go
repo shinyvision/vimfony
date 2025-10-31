@@ -22,7 +22,7 @@ func TestStaticAnalyzerIndexesInheritedMethods(t *testing.T) {
 
 	doc := NewDocument()
 	doc.SetWorkspaceRoot(mockRoot)
-	doc.SetPsr4Map(autoload)
+	doc.SetAutoloadMap(autoload)
 
 	testPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
 	testURI := utils.PathToURI(testPath)
@@ -74,7 +74,7 @@ class One extends BarClass {}
 	mockRoot, err := filepath.Abs("../../mock")
 	require.NoError(t, err)
 	doc.SetWorkspaceRoot(mockRoot)
-	doc.SetPsr4Map(config.AutoloadMap{
+	doc.SetAutoloadMap(config.AutoloadMap{
 		PSR4: map[string][]string{
 			"VendorNamespace\\": {"vendor"},
 		},

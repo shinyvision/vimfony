@@ -276,14 +276,14 @@ func (a *xmlAnalyzer) SetContainerConfig(container *config.ContainerConfig) {
 	a.container = container
 }
 
-func (a *xmlAnalyzer) SetPsr4Map(psr4 *config.AutoloadMap) {
+func (a *xmlAnalyzer) SetAutoloadMap(autoload *config.AutoloadMap) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if psr4 == nil {
+	if autoload == nil {
 		a.autoload = config.AutoloadMap{}
 		return
 	}
-	a.autoload = *psr4
+	a.autoload = *autoload
 }
 
 func (a *xmlAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {

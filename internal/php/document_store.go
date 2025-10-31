@@ -214,5 +214,5 @@ func configureDocumentContext(doc *Document, path string, autoload config.Autolo
 	if workspaceRoot != "" {
 		doc.SetWorkspaceRoot(workspaceRoot)
 	}
-	doc.SetPsr4Map(autoload)
+	doc.SetAutoloadMap(autoload)
 }

@@ -215,7 +215,7 @@ func TestPHPDefinitionForClassReference(t *testing.T) {
 	store := php.NewDocumentStore(10)
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&autoload)
+	an.SetAutoloadMap(&autoload)
 
 	require.NoError(t, an.Changed([]byte(content), nil))
 
@@ -253,7 +253,7 @@ func TestPHPDefinitionForServiceID(t *testing.T) {
 	store := php.NewDocumentStore(10)
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&autoload)
+	an.SetAutoloadMap(&autoload)
 
 	require.NoError(t, an.Changed([]byte(content), nil))
 
@@ -292,7 +292,7 @@ func TestPHPDefinitionForRouteControllerAction(t *testing.T) {
 	store := php.NewDocumentStore(10)
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&autoload)
+	an.SetAutoloadMap(&autoload)
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",
@@ -355,7 +355,7 @@ func TestPHPDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 	store := php.NewDocumentStore(10)
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
-	an.SetPsr4Map(&autoload)
+	an.SetAutoloadMap(&autoload)
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",

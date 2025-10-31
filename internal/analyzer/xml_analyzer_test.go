@@ -89,7 +89,7 @@ func TestXMLAnalyzerOnDefinition(t *testing.T) {
 			"VendorNamespace\\": {"vendor"},
 		},
 	}
-	an.SetPsr4Map(&autoload)
+	an.SetAutoloadMap(&autoload)
 	require.NoError(t, an.Changed([]byte(content), nil))
 
 	servicePos := positionAfter(t, []byte(content), "test.service", len("test"))

@@ -59,8 +59,8 @@ func (d *Document) SetWorkspaceRoot(root string) {
 	d.setContext(d.docURI, root, d.autoload)
 }
 
-// SetPsr4Map assigns the Composer autoload map used during static analysis.
-func (d *Document) SetPsr4Map(autoload config.AutoloadMap) {
+// SetAutoloadMap assigns the Composer autoload map used during static analysis.
+func (d *Document) SetAutoloadMap(autoload config.AutoloadMap) {
 	d.setContext(d.docURI, d.workspaceRoot, autoload)
 }
 

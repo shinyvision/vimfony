@@ -137,8 +137,8 @@ func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams)
 			if ca, ok := doc.Analyzer.(analyzer.ContainerAware); ok {
 				ca.SetContainerConfig(s.config.Container)
 			}
-			if pa, ok := doc.Analyzer.(analyzer.Psr4Aware); ok {
-				pa.SetPsr4Map(&s.config.Autoload)
+			if pa, ok := doc.Analyzer.(analyzer.AutoloadAware); ok {
+				pa.SetAutoloadMap(&s.config.Autoload)
 			}
 			if ra, ok := doc.Analyzer.(analyzer.RoutesAware); ok {
 				ra.SetRoutes(&s.config.Routes)

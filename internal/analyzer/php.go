@@ -236,22 +236,22 @@ func (a *phpAnalyzer) SetRoutes(routes *config.RoutesMap) {
 	a.routes = *routes
 }
 
-func (a *phpAnalyzer) SetPsr4Map(psr4 *config.AutoloadMap) {
+func (a *phpAnalyzer) SetAutoloadMap(autoload *config.AutoloadMap) {
 	a.mu.Lock()
-	if psr4 == nil {
+	if autoload == nil {
 		a.autoload = config.AutoloadMap{}
 		doc := a.doc
 		a.mu.Unlock()
 		if doc != nil {
-			doc.SetPsr4Map(config.AutoloadMap{})
+			doc.SetAutoloadMap(config.AutoloadMap{})
 		}
 		return
 	}
-	a.autoload = *psr4
+	a.autoload = *autoload
 	doc := a.doc
 	a.mu.Unlock()
 	if doc != nil {
-		doc.SetPsr4Map(a.autoload)
+		doc.SetAutoloadMap(a.autoload)
 	}
 }
 

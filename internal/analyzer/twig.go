@@ -261,14 +261,14 @@ func (a *twigAnalyzer) SetRoutes(routes *config.RoutesMap) {
 	a.routes = *routes
 }
 
-func (a *twigAnalyzer) SetPsr4Map(psr4 *config.AutoloadMap) {
+func (a *twigAnalyzer) SetAutoloadMap(autoload *config.AutoloadMap) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if psr4 == nil {
+	if autoload == nil {
 		a.autoload = config.AutoloadMap{}
 		return
 	}
-	a.autoload = *psr4
+	a.autoload = *autoload
 }
 
 func (a *twigAnalyzer) SetDocumentStore(store *php.DocumentStore) {
