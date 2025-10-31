@@ -47,11 +47,14 @@ func (c *Config) LoadPsr4Map() {
 
 func (c *Config) LoadRoutesMap() {
 	logger := commonlog.GetLoggerf("vimfony.config")
-	if c.Container.ContainerXMLPath == "" {
+	if len(c.Container.ContainerXMLPaths) == 0 {
 		return
 	}
 
-	containerPath := c.Container.ContainerXMLPath
+	containerPath := c.Container.ContainerXMLPaths[0]
+	if containerPath == "" {
+		return
+	}
 	if !filepath.IsAbs(containerPath) {
 		containerPath = filepath.Join(c.Container.WorkspaceRoot, containerPath)
 	}

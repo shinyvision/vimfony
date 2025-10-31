@@ -88,8 +88,8 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 				}
 			}
 			if cxp, ok := m["container_xml_path"]; ok {
-				if str, ok := cxp.(string); ok && str != "" {
-					s.config.Container.ContainerXMLPath = str
+				if paths := toStringSlice(cxp); len(paths) > 0 {
+					s.config.Container.SetContainerXMLPaths(paths)
 				}
 			}
 			if phpp, ok := m["php_path"]; ok {
@@ -284,4 +284,32 @@ func logPathStats(cfg *config.Config, context string) {
 	}
 	logger.Infof("path stats (%s): %d bare roots, %d bundle paths across %d bundles",
 		context, len(cfg.Container.Roots), totalBundlePaths, len(cfg.Container.BundleRoots))
+}
+
+func toStringSlice(value any) []string {
+	switch v := value.(type) {
+	case string:
+		if v == "" {
+			return nil
+		}
+		return []string{v}
+	case []any:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if str, ok := item.(string); ok && str != "" {
+				result = append(result, str)
+			}
+		}
+		return result
+	case []string:
+		result := make([]string, 0, len(v))
+		for _, str := range v {
+			if str != "" {
+				result = append(result, str)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
 }

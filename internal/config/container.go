@@ -16,13 +16,22 @@ import (
 
 type ContainerConfig struct {
 	WorkspaceRoot     string
-	ContainerXMLPath  string
+	ContainerXMLPaths []string
 	Roots             []string
 	BundleRoots       map[string][]string
 	ServiceClasses    map[string]string
 	ServiceAliases    map[string]string
 	TwigFunctions     map[string]protocol.Location
 	ServiceReferences map[string]int
+}
+
+const targetServiceID = "twig.loader.native_filesystem"
+
+type containerLoadStats struct {
+	addedBare      int
+	addedBundle    int
+	bundlesTouched map[string]struct{}
+	foundService   bool
 }
 
 func NewContainerConfig() *ContainerConfig {
@@ -36,29 +45,93 @@ func NewContainerConfig() *ContainerConfig {
 	}
 }
 
+// SetContainerXMLPaths replaces the configured container XML paths while keeping order and uniqueness.
+func (c *ContainerConfig) SetContainerXMLPaths(paths []string) {
+	seen := make(map[string]struct{}, len(paths))
+	filtered := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		filtered = append(filtered, p)
+	}
+
+	c.ContainerXMLPaths = filtered
+}
+
 // Populates the Config.
 func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 	logger := commonlog.GetLoggerf("vimfony.config")
-	if c.ContainerXMLPath == "" {
+	if len(c.ContainerXMLPaths) == 0 {
 		return
 	}
 
-	absPath := c.ContainerXMLPath
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(c.WorkspaceRoot, absPath)
+	c.ServiceClasses = make(map[string]string)
+	c.ServiceAliases = make(map[string]string)
+	c.ServiceReferences = make(map[string]int)
+	c.TwigFunctions = make(map[string]protocol.Location)
+
+	totalBare := 0
+	totalBundle := 0
+	totalBundles := make(map[string]struct{})
+	processed := 0
+
+	for idx, relPath := range c.ContainerXMLPaths {
+		if relPath == "" {
+			continue
+		}
+
+		absPath := relPath
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(c.WorkspaceRoot, absPath)
+		}
+
+		stats, err := c.loadContainerXML(absPath, psr4Map)
+		if err != nil {
+			logger.Warningf("cannot read container_xml_path[%d] '%s': %v", idx, relPath, err)
+			continue
+		}
+
+		processed++
+		totalBare += stats.addedBare
+		totalBundle += stats.addedBundle
+		for bundle := range stats.bundlesTouched {
+			totalBundles[bundle] = struct{}{}
+		}
+		if !stats.foundService {
+			logger.Warningf("container_xml_path[%d] '%s': service id '%s' not found; no bundle paths loaded from XML", idx, absPath, targetServiceID)
+		}
+	}
+
+	if processed == 0 {
+		return
+	}
+
+	logger.Infof(
+		"container_xml_path: loaded %d bare roots and %d bundle paths across %d bundles from %d XML files",
+		totalBare, totalBundle, len(totalBundles), processed,
+	)
+}
+
+func (c *ContainerConfig) loadContainerXML(absPath string, psr4Map Psr4Map) (containerLoadStats, error) {
+	logger := commonlog.GetLoggerf("vimfony.config")
+	stats := containerLoadStats{
+		bundlesTouched: make(map[string]struct{}),
+		foundService:   false,
 	}
 
 	f, err := os.Open(absPath)
 	if err != nil {
-		logger.Warningf("cannot read container_xml_path: %v", err)
-		return
+		return stats, err
 	}
 	defer f.Close()
 
 	dec := xml.NewDecoder(f)
 	dec.Strict = false
-
-	const targetServiceID = "twig.loader.native_filesystem"
 
 	inTargetService := false
 	depth := 0
@@ -69,22 +142,16 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 
 	addedBare := 0
 	addedBundle := 0
-	bundlesTouched := map[string]struct{}{}
-	foundService := false
 
-	c.ServiceClasses = make(map[string]string)
-	c.ServiceAliases = make(map[string]string)
-	c.ServiceReferences = make(map[string]int)
-
+	serviceDepth := 0
 	var serviceID string
 	var serviceClass string
-	serviceDepth := 0
 
 	for {
 		tok, err := dec.Token()
 		if err != nil {
 			if err.Error() != "EOF" {
-				logger.Warningf("error while parsing XML: %v", err)
+				logger.Warningf("error while parsing XML '%s': %v", absPath, err)
 			}
 			break
 		}
@@ -93,7 +160,6 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 		case xml.StartElement:
 			local := t.Name.Local
 
-			// Parse service definitions and aliases
 			if local == "service" {
 				if serviceDepth == 0 {
 					id := ""
@@ -112,15 +178,22 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 							isAbstract = a.Value == "true"
 						}
 					}
-					// A service id does not contain spaces, but sometimes the container xml registers them.
+
+					serviceID = ""
+					serviceClass = ""
 					if !isAbstract && id != "" && !strings.Contains(id, " ") {
 						serviceID = id
 						if class != "" {
-							c.ServiceClasses[id] = class
-							serviceClass = class
+							if _, exists := c.ServiceClasses[id]; !exists {
+								c.ServiceClasses[id] = class
+								serviceClass = class
+							}
 						} else if alias != "" {
-							c.ServiceAliases[id] = alias
-							serviceClass = ""
+							if _, classExists := c.ServiceClasses[id]; !classExists {
+								if _, aliasExists := c.ServiceAliases[id]; !aliasExists {
+									c.ServiceAliases[id] = alias
+								}
+							}
 						}
 					}
 				}
@@ -152,7 +225,6 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 				}
 			}
 
-			// Parse twig paths using the common service addPath calls
 			if !inTargetService && local == "service" {
 				id := ""
 				for _, a := range t.Attr {
@@ -163,7 +235,7 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 				}
 				if id == targetServiceID {
 					inTargetService = true
-					foundService = true
+					stats.foundService = true
 					depth = 1
 					continue
 				}
@@ -213,7 +285,7 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 				} else if local == "call" && inAddPathCall {
 					inAddPathCall = false
 					if len(args) != 0 {
-						logger.Infof("XML <call addPath> args: %#v", args)
+						logger.Infof("container_xml_path '%s': XML <call addPath> args: %#v", absPath, args)
 
 						base := strings.TrimSpace(args[0])
 						if base != "" {
@@ -229,7 +301,7 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 									c.BundleRoots[bundle] = utils.AppendUnique(c.BundleRoots[bundle], base)
 									if len(c.BundleRoots[bundle]) > before {
 										addedBundle++
-										bundlesTouched[bundle] = struct{}{}
+										stats.bundlesTouched[bundle] = struct{}{}
 									}
 								}
 							} else {
@@ -251,14 +323,9 @@ func (c *ContainerConfig) LoadFromXML(psr4Map Psr4Map) {
 		}
 	}
 
-	if !foundService {
-		logger.Warningf("container_xml_path: service id '%s' not found; no bundle paths loaded from XML", targetServiceID)
-	}
-
-	logger.Infof(
-		"container_xml_path: loaded %d bare roots and %d bundle paths across %d bundles from XML",
-		addedBare, addedBundle, len(bundlesTouched),
-	)
+	stats.addedBare = addedBare
+	stats.addedBundle = addedBundle
+	return stats, nil
 }
 
 func (c *ContainerConfig) indexTwigFunctions(class string, psr4Map Psr4Map) {
