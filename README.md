@@ -2,7 +2,7 @@
     <img src="https://raw.githubusercontent.com/shinyvision/vimfony/main/.github/assets/vimfony_sm.png" alt="Vimfony Logo">
 </p>
 
-This is a language server that adds Symfony integration in Neovim.
+This is a language server that adds Symfony integration in Neovim. It is the missing **Vim / Neovim Symfony plugin**. (totally added that for SEO reasons)
 
 If you find a bug or want a feature, you can create an issue or a PR. I’ll probably take a look at it.
 We finally have several autocomplete features working in Vimfony!
@@ -20,14 +20,16 @@ We finally have several autocomplete features working in Vimfony!
 ## Planned features
 These features are not yet implemented but would be useful:
 (feel free to create a PR if you want to contribute)
-- Autocomplete Twig files
 - Autocomplete form options
 - `gd` Twig components
-- `gd` routes
 - Version checker & updater (`vimfony update`)
 
 ### Coming up
-Main should be up-to-date with the latest release, so you’re good to go! 🥳
+You can get these features if you build from source:
+- Support for Composer’s autoload_classmap for more complete autoloading
+- Support for multiple xml files in container_xml_path, for example in [Sulu](https://github.com/sulu/sulu) projects
+- Autocomplete Twig files: works in php, twig and yaml (if the key is equal to ‘template’)
+- `gd` routes
 
 ## How to use
 You can [download a release](https://github.com/shinyvision/vimfony/releases) for your OS and CPU or build from source:
