@@ -532,6 +532,7 @@ func (a *twigAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completio
 
 	items = append(items, a.routeNameCompletionItems(pos)...)
 	items = append(items, a.routeParameterCompletionItems(pos)...)
+	items = append(items, a.twigTemplateCompletionItems(pos)...)
 
 	if foundFunction, functionPrefix := a.isTypingFunction(pos); foundFunction {
 		items = append(items, a.twigFunctionCompletionItems(functionPrefix)...)
@@ -613,4 +614,97 @@ func (a *twigAnalyzer) routeParameterCompletionItems(pos protocol.Position) []pr
 		return nil
 	}
 	return makeRouteParameterCompletionItems(a.routes, routeName, prefix)
+}
+
+func (a *twigAnalyzer) twigTemplateCompletionItems(pos protocol.Position) []protocol.CompletionItem {
+	if a.tree == nil || a.container == nil {
+		return nil
+	}
+
+	strNode, ok := a.templateStringContextAt(pos)
+	if !ok {
+		return nil
+	}
+
+	templates := a.container.TwigTemplates()
+	if len(templates) == 0 {
+		return nil
+	}
+
+	prefix := a.stringPrefix(strNode, pos)
+	prefixLower := strings.ToLower(prefix)
+	kind := protocol.CompletionItemKindFile
+	detail := "Twig template"
+	items := make([]protocol.CompletionItem, 0, len(templates))
+
+	for _, tpl := range templates {
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(tpl), prefixLower) {
+			continue
+		}
+		label := tpl
+		detailCopy := detail
+		items = append(items, protocol.CompletionItem{
+			Label:  label,
+			Kind:   &kind,
+			Detail: &detailCopy,
+		})
+	}
+
+	return items
+}
+
+func (a *twigAnalyzer) templateStringContextAt(pos protocol.Position) (sitter.Node, bool) {
+	if a.tree == nil {
+		return sitter.Node{}, false
+	}
+
+	point, ok := lspPosToPoint(pos, a.content)
+	if !ok {
+		return sitter.Node{}, false
+	}
+
+	root := a.tree.RootNode()
+	if root.IsNull() {
+		return sitter.Node{}, false
+	}
+
+	node := root.NamedDescendantForPointRange(point, point)
+	if node.IsNull() {
+		return sitter.Node{}, false
+	}
+
+	var str sitter.Node
+	for cur := node; !cur.IsNull(); cur = cur.Parent() {
+		if str.IsNull() && cur.Type() == "string" {
+			str = cur
+			continue
+		}
+		if str.IsNull() {
+			continue
+		}
+
+		switch cur.Type() {
+		case "tag_statement":
+			if tagNode := cur.NamedChild(0); !tagNode.IsNull() && tagNode.Type() == "tag" {
+				tagName := strings.ToLower(strings.TrimSpace(string(a.content[tagNode.StartByte():tagNode.EndByte()])))
+				switch tagName {
+				case "include", "embed", "extends", "form_theme":
+					return str, true
+				}
+			}
+		case "import_statement":
+			return str, true
+		case "function_call":
+			if fnNode := cur.NamedChild(0); !fnNode.IsNull() && fnNode.Type() == "function_identifier" {
+				fnName := strings.ToLower(strings.TrimSpace(string(a.content[fnNode.StartByte():fnNode.EndByte()])))
+				if fnName == "include" {
+					return str, true
+				}
+			}
+		case "template", "script_tag", "style_tag":
+			return sitter.Node{}, false
+		}
+	}
+
+	return sitter.Node{}, false
 }
