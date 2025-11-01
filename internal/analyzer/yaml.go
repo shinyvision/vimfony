@@ -78,12 +78,21 @@ func (a *yamlAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completio
 		return nil, nil
 	}
 
-	found, prefix := a.hasServicePrefix(pos)
-	if !found {
+	items := make([]protocol.CompletionItem, 0)
+
+	if templateFound, prefix := a.templatePrefix(pos); templateFound {
+		items = append(items, a.templateCompletionItems(prefix)...)
+	}
+
+	if serviceFound, prefix := a.hasServicePrefix(pos); serviceFound {
+		items = append(items, a.serviceCompletionItems(prefix)...)
+	}
+
+	if len(items) == 0 {
 		return nil, nil
 	}
 
-	return a.serviceCompletionItems(prefix), nil
+	return items, nil
 }
 
 func (a *yamlAnalyzer) serviceCompletionItems(prefix string) []protocol.CompletionItem {
@@ -132,6 +141,87 @@ func (a *yamlAnalyzer) serviceCompletionItems(prefix string) []protocol.Completi
 		return idI < idJ
 	})
 
+	return items
+}
+
+func (a *yamlAnalyzer) templatePrefix(pos protocol.Position) (bool, string) {
+	lineIdx := int(pos.Line)
+	if lineIdx < 0 || lineIdx >= len(a.lines) {
+		return false, ""
+	}
+
+	line := a.lines[lineIdx]
+	colonIdx := strings.Index(line, ":")
+	if colonIdx < 0 {
+		return false, ""
+	}
+
+	key := strings.TrimSpace(line[:colonIdx])
+	if key != "template" {
+		return false, ""
+	}
+
+	charIdx := int(pos.Character)
+	if charIdx < 0 {
+		charIdx = 0
+	}
+	if charIdx > len(line) {
+		charIdx = len(line)
+	}
+	if charIdx <= colonIdx {
+		return false, ""
+	}
+
+	valueSegment := line[colonIdx+1 : charIdx]
+	valueSegment = strings.TrimLeft(valueSegment, " \t")
+	prefix := valueSegment
+	if len(prefix) > 0 && (prefix[0] == '\'' || prefix[0] == '"') {
+		prefix = prefix[1:]
+	}
+	prefix = strings.TrimSuffix(prefix, "'")
+	prefix = strings.TrimSuffix(prefix, "\"")
+	prefix = strings.TrimSpace(prefix)
+	return true, prefix
+}
+
+func (a *yamlAnalyzer) templateCompletionItems(prefix string) []protocol.CompletionItem {
+	if a.container == nil {
+		return nil
+	}
+
+	templates := a.container.TwigTemplates()
+	if len(templates) == 0 {
+		return nil
+	}
+
+	kind := protocol.CompletionItemKindFile
+	detail := "Twig template"
+	prefixLower := strings.ToLower(prefix)
+
+	filtered := make([]string, 0, len(templates))
+	for _, tpl := range templates {
+		if prefix != "" && !strings.HasPrefix(strings.ToLower(tpl), prefixLower) {
+			continue
+		}
+		filtered = append(filtered, tpl)
+	}
+
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	sort.Strings(filtered)
+
+	items := make([]protocol.CompletionItem, 0, len(filtered))
+	for _, tpl := range filtered {
+		label := tpl
+		detailCopy := detail
+		items = append(items, protocol.CompletionItem{
+			Label:  label,
+			Kind:   &kind,
+			Detail: &detailCopy,
+		})
+	}
 	return items
 }
 
