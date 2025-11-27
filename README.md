@@ -16,6 +16,12 @@ We finally have several autocomplete features working in Vimfony!
 - Autocomplete Twig functions
 - Autocomplete Twig variables
 - Autocomplete route names and parameters in Twig files and PHP files
+- Support for Composer’s autoload_classmap for more complete autoloading
+- Support for multiple xml files in container_xml_path, for example in [Sulu](https://github.com/sulu/sulu) projects
+- Autocomplete Twig files: works in php, twig and yaml (if the key is equal to ‘template’)
+- `gd` routes
+- Autocomplete translations (only YAML)
+- `gd` translations (only YAML)
 
 ## Planned features
 These features are not yet implemented but would be useful:
@@ -25,13 +31,7 @@ These features are not yet implemented but would be useful:
 - Version checker & updater (`vimfony update`)
 
 ### Coming up
-You can get these features if you build from source:
-- Support for Composer’s autoload_classmap for more complete autoloading
-- Support for multiple xml files in container_xml_path, for example in [Sulu](https://github.com/sulu/sulu) projects
-- Autocomplete Twig files: works in php, twig and yaml (if the key is equal to ‘template’)
-- `gd` routes
-- Autocomplete translations (only YAML)
-- `gd` translations (only YAML)
+Main should be up-to-date with the latest release, so you’re good to go! 🥳
 
 ## How to use
 You can [download a release](https://github.com/shinyvision/vimfony/releases) for your OS and CPU or build from source:
@@ -56,6 +56,12 @@ if git_root ~= nil then
     init_options = {
       roots = { "templates" },
       container_xml_path = (git_root .. "/var/cache/dev/App_KernelDevDebugContainer.xml"),
+      -- OR:
+      -- container_xml_path = {
+      --   (git_root .. "/var/cache/dev/App_KernelDevDebugContainer.xml"),
+      --   (git_root .. "/var/cache/website/dev/App_KernelDevDebugContainer.xml"),
+      --   (git_root .. "/var/cache/admin/dev/App_KernelDevDebugContainer.xml"),
+      -- },
       vendor_dir = git_root .. "/vendor",
       -- Optional:
       -- php_path = "/usr/bin/php",
