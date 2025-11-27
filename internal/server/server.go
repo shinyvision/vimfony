@@ -108,6 +108,7 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 	s.config.LoadAutoloadMap()
 	s.config.Container.LoadFromXML(s.config.Autoload)
 	s.config.LoadRoutesMap()
+	s.config.LoadTranslations()
 	s.docStore.Configure(s.config.Autoload, s.config.Container.WorkspaceRoot)
 
 	logPathStats(s.config, "initialize")

@@ -282,6 +282,10 @@ func (a *twigAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location,
 		return locs, nil
 	}
 
+	if locs, ok := a.resolveTranslationDefinition(pos); ok {
+		return locs, nil
+	}
+
 	a.mu.RLock()
 	content := string(a.content)
 	container := a.container
@@ -533,6 +537,7 @@ func (a *twigAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completio
 	items = append(items, a.routeNameCompletionItems(pos)...)
 	items = append(items, a.routeParameterCompletionItems(pos)...)
 	items = append(items, a.twigTemplateCompletionItems(pos)...)
+	items = append(items, a.translationCompletionItems(pos)...)
 
 	if foundFunction, functionPrefix := a.isTypingFunction(pos); foundFunction {
 		items = append(items, a.twigFunctionCompletionItems(functionPrefix)...)

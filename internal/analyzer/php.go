@@ -29,7 +29,7 @@ type phpAnalyzer struct {
 	path           string
 }
 
-type phpRouteCallCtx struct {
+type phpCallCtx struct {
 	callNode sitter.Node
 	argsNode sitter.Node
 	argIndex int
@@ -45,6 +45,8 @@ const (
 	routerFQN                = "Symfony\\Component\\Routing\\Router"
 	abstractControllerFQN    = "Symfony\\Bundle\\FrameworkBundle\\Controller\\AbstractController"
 	twigEnvironmentFQN       = "Twig\\Environment"
+	translatorInterfaceFQN   = "Symfony\\Contracts\\Translation\\TranslatorInterface"
+	legacyTranslatorFQN      = "Symfony\\Component\\Translation\\TranslatorInterface"
 )
 
 var routerCanonical = func() map[string]string {
@@ -287,6 +289,10 @@ func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 		items = append(items, a.phpRouteParameterCompletionItems(pos)...)
 	}
 
+	if a.container != nil {
+		items = append(items, a.translationCompletionItems(pos)...)
+	}
+
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -332,6 +338,10 @@ func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 	}
 
 	if locs, ok := a.resolveServiceDefinition(content, pos, container, autoload); ok {
+		return locs, nil
+	}
+
+	if locs, ok := a.resolveTranslationDefinition(pos); ok {
 		return locs, nil
 	}
 
@@ -465,19 +475,19 @@ func (a *phpAnalyzer) isTypingPhpRouteParameter(pos protocol.Position) (bool, st
 	return true, routeName, a.stringPrefix(ctx.strNode, pos)
 }
 
-func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx, bool) {
+func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpCallCtx, bool) {
 	if a.doc == nil {
-		return phpRouteCallCtx{}, false
+		return phpCallCtx{}, false
 	}
 
 	node, content, index, ok := a.doc.GetNodeAt(pos)
 	if !ok {
-		return phpRouteCallCtx{}, false
+		return phpCallCtx{}, false
 	}
 
 	controllerTarget := strings.ToLower(normalizeFQN(abstractControllerFQN))
 	if controllerTarget == "" {
-		return phpRouteCallCtx{}, false
+		return phpCallCtx{}, false
 	}
 
 	var str sitter.Node
@@ -501,7 +511,7 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 		argNode := cur
 		argsNode := argNode.Parent()
 		if argsNode.IsNull() || argsNode.Type() != "arguments" {
-			return phpRouteCallCtx{}, false
+			return phpCallCtx{}, false
 		}
 
 		argIndex := -1
@@ -512,7 +522,7 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 			}
 		}
 		if argIndex < 0 {
-			return phpRouteCallCtx{}, false
+			return phpCallCtx{}, false
 		}
 
 		callNode := argsNode.Parent()
@@ -520,17 +530,17 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 			callNode = callNode.Parent()
 		}
 		if callNode.IsNull() || callNode.Type() != "member_call_expression" {
-			return phpRouteCallCtx{}, false
+			return phpCallCtx{}, false
 		}
 
 		nameNode := callNode.ChildByFieldName("name")
 		if nameNode.IsNull() {
-			return phpRouteCallCtx{}, false
+			return phpCallCtx{}, false
 		}
 
 		objectNode := callNode.ChildByFieldName("object")
 		if objectNode.IsNull() {
-			return phpRouteCallCtx{}, false
+			return phpCallCtx{}, false
 		}
 
 		methodName := strings.TrimSpace(nameNode.Content(content))
@@ -552,12 +562,12 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 			propertyName := thisPropertyNameFromMemberAccessContent(content, objectNode)
 			if propertyName != "" {
 				if !propertyHasRouterTypeIndex(index, propertyName) {
-					return phpRouteCallCtx{}, false
+					return phpCallCtx{}, false
 				}
 				if str.IsNull() {
-					return phpRouteCallCtx{}, false
+					return phpCallCtx{}, false
 				}
-				return phpRouteCallCtx{
+				return phpCallCtx{
 					callNode: callNode,
 					argsNode: argsNode,
 					argIndex: argIndex,
@@ -569,15 +579,15 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 			if objectNode.Type() == "variable_name" {
 				varName := php.VariableNameFromNode(objectNode, content)
 				if varName == "" {
-					return phpRouteCallCtx{}, false
+					return phpCallCtx{}, false
 				}
 				if !variableHasRouterTypeIndex(index, funcName, varName, callLine) {
-					return phpRouteCallCtx{}, false
+					return phpCallCtx{}, false
 				}
 				if str.IsNull() {
-					return phpRouteCallCtx{}, false
+					return phpCallCtx{}, false
 				}
-				return phpRouteCallCtx{
+				return phpCallCtx{
 					callNode: callNode,
 					argsNode: argsNode,
 					argIndex: argIndex,
@@ -587,28 +597,28 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpRouteCallCtx,
 			}
 		case "generateUrl", "redirectToRoute":
 			if !isThisVariable(objectNode, content) {
-				return phpRouteCallCtx{}, false
+				return phpCallCtx{}, false
 			}
 			if !classExtendsAbstractControllerIndex(index, callNode, controllerTarget) {
-				return phpRouteCallCtx{}, false
+				return phpCallCtx{}, false
 			}
 			if str.IsNull() {
-				return phpRouteCallCtx{}, false
+				return phpCallCtx{}, false
 			}
-			return phpRouteCallCtx{
+			return phpCallCtx{
 				callNode: callNode,
 				argsNode: argsNode,
 				argIndex: argIndex,
 				strNode:  str,
 			}, true
 		default:
-			return phpRouteCallCtx{}, false
+			return phpCallCtx{}, false
 		}
 
-		return phpRouteCallCtx{}, false
+		return phpCallCtx{}, false
 	}
 
-	return phpRouteCallCtx{}, false
+	return phpCallCtx{}, false
 }
 
 func (a *phpAnalyzer) twigRenderContextAt(pos protocol.Position) (sitter.Node, bool) {

@@ -30,6 +30,8 @@ You can get these features if you build from source:
 - Support for multiple xml files in container_xml_path, for example in [Sulu](https://github.com/sulu/sulu) projects
 - Autocomplete Twig files: works in php, twig and yaml (if the key is equal to ‘template’)
 - `gd` routes
+- Autocomplete translations (only YAML)
+- `gd` translations (only YAML)
 
 ## How to use
 You can [download a release](https://github.com/shinyvision/vimfony/releases) for your OS and CPU or build from source:

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	"github.com/shinyvision/vimfony/internal/translations"
 	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/tliron/commonlog"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -26,6 +27,9 @@ type ContainerConfig struct {
 	ServiceAliases    map[string]string
 	TwigFunctions     map[string]protocol.Location
 	ServiceReferences map[string]int
+	TranslationRoots  []string
+	TranslationKeys   translations.TranslationMap
+	DefaultLocale     string
 	twigTemplates     []string
 	twigTemplateSig   string
 	twigMu            sync.Mutex
@@ -43,11 +47,14 @@ type containerLoadStats struct {
 func NewContainerConfig() *ContainerConfig {
 	return &ContainerConfig{
 		Roots:             []string{"templates"},
+		TranslationRoots:  []string{"translations"},
 		BundleRoots:       make(map[string][]string),
 		ServiceClasses:    make(map[string]string),
 		ServiceAliases:    make(map[string]string),
 		TwigFunctions:     make(map[string]protocol.Location),
 		ServiceReferences: make(map[string]int),
+		TranslationKeys:   make(translations.TranslationMap),
+		DefaultLocale:     "en", // Default to 'en' if not found
 	}
 }
 
@@ -157,6 +164,10 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 	var serviceID string
 	var serviceClass string
 
+	inParameter := false
+	parameterKey := ""
+	var paramBuf strings.Builder
+
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -170,7 +181,18 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 		case xml.StartElement:
 			local := t.Name.Local
 
-			if local == "service" {
+			if local == "parameter" {
+				for _, a := range t.Attr {
+					if a.Name.Local == "key" {
+						parameterKey = a.Value
+						break
+					}
+				}
+				if parameterKey == "kernel.default_locale" {
+					inParameter = true
+					paramBuf.Reset()
+				}
+			} else if local == "service" {
 				if serviceDepth == 0 {
 					id := ""
 					class := ""
@@ -274,9 +296,20 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 			if inTargetService && inAddPathCall && inArgument {
 				argBuf.Write(t)
 			}
+			if inParameter {
+				paramBuf.Write(t)
+			}
 
 		case xml.EndElement:
 			local := t.Name.Local
+
+			if local == "parameter" {
+				if inParameter {
+					c.DefaultLocale = strings.TrimSpace(paramBuf.String())
+					logger.Infof("Found kernel.default_locale: %s", c.DefaultLocale)
+					inParameter = false
+				}
+			}
 
 			if local == "service" {
 				serviceDepth--
