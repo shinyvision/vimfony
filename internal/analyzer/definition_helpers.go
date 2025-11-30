@@ -15,15 +15,15 @@ func normalizeFQN(name string) string {
 	return name
 }
 
-func resolveClassLocations(className string, container *config.ContainerConfig, autoload config.AutoloadMap) ([]protocol.Location, bool) {
-	if container == nil || autoload.IsEmpty() {
+func resolveClassLocations(className string, container *config.ContainerConfig, autoload config.AutoloadMap, store *php.DocumentStore) ([]protocol.Location, bool) {
+	if container == nil || autoload.IsEmpty() || store == nil {
 		return nil, false
 	}
 	className = normalizeFQN(className)
 	if className == "" {
 		return nil, false
 	}
-	target, classRange, ok := php.Resolve(className, autoload, container.WorkspaceRoot)
+	target, classRange, ok := php.Resolve(store, className)
 	if !ok {
 		return nil, false
 	}
@@ -34,7 +34,7 @@ func resolveClassLocations(className string, container *config.ContainerConfig, 
 	return []protocol.Location{loc}, true
 }
 
-func resolveServiceIDLocations(serviceID string, container *config.ContainerConfig, autoload config.AutoloadMap) ([]protocol.Location, bool) {
+func resolveServiceIDLocations(serviceID string, container *config.ContainerConfig, autoload config.AutoloadMap, store *php.DocumentStore) ([]protocol.Location, bool) {
 	if container == nil {
 		return nil, false
 	}
@@ -42,7 +42,7 @@ func resolveServiceIDLocations(serviceID string, container *config.ContainerConf
 	if !ok {
 		return nil, false
 	}
-	return resolveClassLocations(className, container, autoload)
+	return resolveClassLocations(className, container, autoload, store)
 }
 
 func resolveRouteLocations(route config.Route, uri string, doc *php.Document) []protocol.Location {
@@ -106,8 +106,8 @@ func routeDocument(route config.Route, container *config.ContainerConfig, autolo
 	if className == "" {
 		return nil, "", false
 	}
-	path, _, ok := php.Resolve(className, autoload, container.WorkspaceRoot)
-	if !ok {
+	path, _, found := php.Resolve(store, className)
+	if !found {
 		return nil, "", false
 	}
 	doc, err := store.Get(path)

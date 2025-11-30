@@ -1,88 +1,158 @@
 package php
 
 import (
-	"os"
-	"regexp"
 	"strings"
 
+	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-var classNameRe = regexp.MustCompile(`([A-Z][a-zA-Z0-9_]*\\)+[a-zA-Z0-9_]+`)
-var classDefinitionRe = regexp.MustCompile(`(class|trait|interface)\s+([a-zA-Z0-9_]+)`) // Capture group 2 is the class name
-
-func PathAt(content string, pos protocol.Position) (string, bool) {
-	offset := pos.IndexIn(content)
-
-	idxs := classNameRe.FindAllStringSubmatchIndex(content, -1)
-	for _, m := range idxs {
-		if len(m) >= 2 && m[0] <= offset && offset <= m[1] {
-			start, end := m[0], m[1]
-			if 0 <= start && start <= end && end <= len(content) {
-				return content[start:end], true
-			}
-		}
+// PathAt returns the PHP class name or fully qualified name at the given position.
+func PathAt(store *DocumentStore, path string, pos protocol.Position) (string, bool) {
+	if store == nil {
+		return "", false
+	}
+	doc, err := store.Get(path)
+	if err != nil {
+		return "", false
 	}
 
-	return "", false
+	var result string
+	var found bool
+
+	doc.Read(func(tree *sitter.Tree, content []byte, _ IndexedTree) {
+		root := tree.RootNode()
+		if root.IsNull() {
+			return
+		}
+		point := sitter.Point{Row: uint(pos.Line), Column: uint(pos.Character)}
+		node := root.NamedDescendantForPointRange(point, point)
+
+		var candidate sitter.Node
+		for cur := node; !cur.IsNull(); cur = cur.Parent() {
+			if cur.Type() == "qualified_name" {
+				result = cur.Content(content)
+				found = true
+				return
+			}
+			if cur.Type() == "name" && candidate.IsNull() {
+				candidate = cur
+			}
+		}
+
+		if !candidate.IsNull() {
+			result = candidate.Content(content)
+			found = true
+		}
+	})
+
+	return result, found
 }
 
-func Resolve(className string, autoloadMap config.AutoloadMap, workspaceRoot string) (string, protocol.Range, bool) {
+// Resolve locates the file defining the given class and returns its path and the range of the class definition.
+func Resolve(store *DocumentStore, className string) (string, protocol.Range, bool) {
+	if store == nil {
+		return "", protocol.Range{}, false
+	}
+	autoloadMap, workspaceRoot := store.Config()
 	path, ok := config.AutoloadResolve(className, autoloadMap, workspaceRoot)
 	if !ok {
-
 		return "", protocol.Range{}, false
 	}
 
-	// Found the file, now find the class definition within it
-	content, err := os.ReadFile(path)
+	doc, err := store.Get(path)
 	if err != nil {
-		return "", protocol.Range{}, false
+		return path, protocol.Range{}, true // Found file but failed to parse/load
 	}
 
-	lines := strings.Split(string(content), "\n")
-	for i, line := range lines {
-		match := classDefinitionRe.FindStringSubmatchIndex(line)
-		if len(match) >= 4 {
-			// match[4] is start of class name, match[5] is end of class name
-			classRange := protocol.Range{
-				Start: protocol.Position{Line: uint32(i), Character: uint32(match[4])},
-				End:   protocol.Position{Line: uint32(i), Character: uint32(match[5])},
+	var rng protocol.Range
+	var found bool
+
+	doc.Read(func(tree *sitter.Tree, content []byte, _ IndexedTree) {
+		root := tree.RootNode()
+		targetName := simpleClassName(className)
+		var foundNode sitter.Node
+
+		var findClass func(n sitter.Node)
+		findClass = func(n sitter.Node) {
+			if !foundNode.IsNull() {
+				return
 			}
-			return path, classRange, true
+			t := n.Type()
+			if t == "class_declaration" || t == "interface_declaration" || t == "trait_declaration" {
+				nameNode := n.ChildByFieldName("name")
+				if !nameNode.IsNull() && nameNode.Content(content) == targetName {
+					foundNode = n
+					return
+				}
+			}
+			for i := uint32(0); i < n.NamedChildCount(); i++ {
+				findClass(n.NamedChild(i))
+			}
 		}
-	}
-	return path, protocol.Range{}, true // Found file, but not class definition
+		findClass(root)
+
+		if !foundNode.IsNull() {
+			nameNode := foundNode.ChildByFieldName("name")
+			if !nameNode.IsNull() {
+				r := rangeFromNode(nameNode)
+				rng = protocol.Range{
+					Start: protocol.Position{Line: uint32(r.StartLine - 1), Character: uint32(r.StartColumn)},
+					End:   protocol.Position{Line: uint32(r.EndLine - 1), Character: uint32(r.EndColumn)},
+				}
+				found = true
+			}
+		}
+	})
+
+	return path, rng, found
 }
 
-func FindMethodRange(path, methodName string) (protocol.Range, bool) {
-	content, err := os.ReadFile(path)
+// FindMethodRange locates the definition of a method within a file.
+func FindMethodRange(store *DocumentStore, path, methodName string) (protocol.Range, bool) {
+	if store == nil {
+		return protocol.Range{}, false
+	}
+	doc, err := store.Get(path)
 	if err != nil {
 		return protocol.Range{}, false
 	}
 
-	methodPattern := regexp.MustCompile(`(?i)function\s+(` + regexp.QuoteMeta(methodName) + `)\s*\(`)
-	loc := methodPattern.FindStringSubmatchIndex(string(content))
-	if loc == nil || len(loc) < 4 {
-		return protocol.Range{}, false
-	}
+	var rng protocol.Range
+	var found bool
 
-	start := loc[2]
-	end := loc[3]
+	doc.Read(func(tree *sitter.Tree, content []byte, _ IndexedTree) {
+		root := tree.RootNode()
+		var foundNode sitter.Node
 
-	text := string(content)
-	line := strings.Count(text[:start], "\n")
-	lastNewline := strings.LastIndex(text[:start], "\n")
-	startCol := start
-	endCol := end
-	if lastNewline >= 0 {
-		startCol = start - lastNewline - 1
-		endCol = end - lastNewline - 1
-	}
+		var findMethod func(n sitter.Node)
+		findMethod = func(n sitter.Node) {
+			if !foundNode.IsNull() {
+				return
+			}
+			if n.Type() == "method_declaration" {
+				nameNode := n.ChildByFieldName("name")
+				if !nameNode.IsNull() && strings.EqualFold(nameNode.Content(content), methodName) {
+					foundNode = nameNode
+					return
+				}
+			}
+			for i := uint32(0); i < n.NamedChildCount(); i++ {
+				findMethod(n.NamedChild(i))
+			}
+		}
+		findMethod(root)
 
-	return protocol.Range{
-		Start: protocol.Position{Line: uint32(line), Character: uint32(startCol)},
-		End:   protocol.Position{Line: uint32(line), Character: uint32(endCol)},
-	}, true
+		if !foundNode.IsNull() {
+			r := rangeFromNode(foundNode)
+			rng = protocol.Range{
+				Start: protocol.Position{Line: uint32(r.StartLine - 1), Character: uint32(r.StartColumn)},
+				End:   protocol.Position{Line: uint32(r.EndLine - 1), Character: uint32(r.EndColumn)},
+			}
+			found = true
+		}
+	})
+
+	return rng, found
 }

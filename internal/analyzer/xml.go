@@ -12,6 +12,7 @@ import (
 	tsxml "github.com/alexaandru/go-sitter-forest/xml"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/twig"
 	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -24,6 +25,8 @@ type xmlAnalyzer struct {
 	content   []byte
 	container *config.ContainerConfig
 	autoload  config.AutoloadMap
+	store     *php.DocumentStore
+	path      string
 }
 
 func NewXMLAnalyzer() Analyzer {
@@ -286,6 +289,18 @@ func (a *xmlAnalyzer) SetAutoloadMap(autoload *config.AutoloadMap) {
 	a.autoload = *autoload
 }
 
+func (a *xmlAnalyzer) SetDocumentStore(store *php.DocumentStore) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.store = store
+}
+
+func (a *xmlAnalyzer) SetDocumentPath(path string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.path = path
+}
+
 func (a *xmlAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -354,6 +369,7 @@ func (a *xmlAnalyzer) serviceCompletionItems(prefix string) []protocol.Completio
 func (a *xmlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, error) {
 	a.mu.RLock()
 	content := string(a.content)
+	store := a.store
 	container := a.container
 	autoload := a.autoload
 	a.mu.RUnlock()
@@ -387,19 +403,19 @@ func (a *xmlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 	}
 
 	if strings.HasPrefix(identifier, "@") {
-		if locs, ok := resolveServiceIDLocations(strings.TrimPrefix(identifier, "@"), container, autoload); ok {
+		if locs, ok := resolveServiceIDLocations(strings.TrimPrefix(identifier, "@"), container, autoload, store); ok {
 			return locs, nil
 		}
 		identifier = strings.TrimPrefix(identifier, "@")
 	}
 
 	if strings.Contains(identifier, "\\") {
-		if locs, ok := resolveClassLocations(identifier, container, autoload); ok {
+		if locs, ok := resolveClassLocations(identifier, container, autoload, store); ok {
 			return locs, nil
 		}
 	}
 
-	if locs, ok := resolveServiceIDLocations(identifier, container, autoload); ok {
+	if locs, ok := resolveServiceIDLocations(identifier, container, autoload, store); ok {
 		return locs, nil
 	}
 

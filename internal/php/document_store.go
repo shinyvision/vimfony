@@ -26,6 +26,12 @@ type DocumentStore struct {
 	root     string
 }
 
+func (s *DocumentStore) Config() (config.AutoloadMap, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.autoload, s.root
+}
+
 func (s *DocumentStore) contextSnapshot() (config.AutoloadMap, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -133,7 +139,7 @@ func (s *DocumentStore) Get(path string) (*Document, error) {
 
 	doc := NewDocument()
 	configureDocumentContext(doc, path, autoload, root)
-	if err := doc.Update(data, nil); err != nil {
+	if err := doc.Update(data, nil, s); err != nil {
 		return nil, err
 	}
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/utils"
 	"github.com/stretchr/testify/require"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -39,6 +40,10 @@ func TestYAMLAnalyzerOnDefinition(t *testing.T) {
 		},
 	}
 	an.SetAutoloadMap(&autoload)
+	store := php.NewDocumentStore(10)
+	store.Configure(autoload, mockRoot)
+	an.SetDocumentStore(store)
+	an.SetDocumentPath("/tmp/test.yaml")
 	require.NoError(t, an.Changed([]byte(content), nil))
 
 	servicePos := positionAfter(t, []byte(content), "@test.service", len("@test"))

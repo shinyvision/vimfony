@@ -86,7 +86,6 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 			}
 		}
 		if argIndex != 0 { // Translation key is usually the first argument
-			// fmt.Printf("DEBUG: argIndex is %d\n", argIndex) // Removed debug logging
 			return phpCallCtx{}, false
 		}
 
@@ -95,25 +94,21 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 			callNode = callNode.Parent()
 		}
 		if callNode.IsNull() || callNode.Type() != "member_call_expression" {
-			// fmt.Println("DEBUG: callNode is null or not member_call_expression") // Removed debug logging
 			return phpCallCtx{}, false
 		}
 
 		nameNode := callNode.ChildByFieldName("name")
 		if nameNode.IsNull() {
-			// fmt.Println("DEBUG: nameNode is null") // Removed debug logging
 			return phpCallCtx{}, false
 		}
 
 		objectNode := callNode.ChildByFieldName("object")
 		if objectNode.IsNull() {
-			// fmt.Println("DEBUG: objectNode is null") // Removed debug logging
 			return phpCallCtx{}, false
 		}
 
 		methodName := strings.TrimSpace(nameNode.Content(content))
 		if methodName != "trans" {
-			// fmt.Printf("DEBUG: methodName is %s\n", methodName) // Removed debug logging
 			return phpCallCtx{}, false
 		}
 
@@ -125,7 +120,6 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 			controllerTarget := strings.ToLower(normalizeFQN(abstractControllerFQN))
 			if controllerTarget != "" && classExtendsAbstractControllerIndex(index, callNode, controllerTarget) {
 				if str.IsNull() {
-					// fmt.Println("DEBUG: str is null (this)") // Removed debug logging
 					return phpCallCtx{}, false
 				}
 				return phpCallCtx{
@@ -134,8 +128,6 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 					argIndex: argIndex,
 					strNode:  str,
 				}, true
-			} else {
-				// fmt.Println("DEBUG: class does not extend AbstractController") // Removed debug logging
 			}
 		}
 
@@ -146,7 +138,6 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 			if funcName != "" {
 				if variableHasTranslatorTypeIndex(index, funcName, varName, callLine) {
 					if str.IsNull() {
-						// fmt.Println("DEBUG: str is null (var)") // Removed debug logging
 						return phpCallCtx{}, false
 					}
 					return phpCallCtx{
@@ -155,11 +146,7 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 						argIndex: argIndex,
 						strNode:  str,
 					}, true
-				} else {
-					// fmt.Printf("DEBUG: variable %s in %s does not have translator type\n", varName, funcName) // Removed debug logging
 				}
-			} else {
-				// fmt.Println("DEBUG: enclosingFunctionName failed") // Removed debug logging
 			}
 		}
 
@@ -168,7 +155,6 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 		if propertyName != "" {
 			if propertyHasTranslatorTypeIndex(index, propertyName) {
 				if str.IsNull() {
-					// fmt.Println("DEBUG: str is null (prop)") // Removed debug logging
 					return phpCallCtx{}, false
 				}
 				return phpCallCtx{
@@ -177,8 +163,6 @@ func (a *phpAnalyzer) translationContextAt(pos protocol.Position) (phpCallCtx, b
 					argIndex: argIndex,
 					strNode:  str,
 				}, true
-			} else {
-				// fmt.Printf("DEBUG: property %s does not have translator type\n", propertyName) // Removed debug logging
 			}
 		}
 

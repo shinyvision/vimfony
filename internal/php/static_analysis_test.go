@@ -20,9 +20,12 @@ func TestStaticAnalyzerIndexesInheritedMethods(t *testing.T) {
 		},
 	}
 
+	store := NewDocumentStore(10)
+	store.Configure(autoload, mockRoot)
+
 	doc := NewDocument()
-	doc.SetWorkspaceRoot(mockRoot)
 	doc.SetAutoloadMap(autoload)
+	doc.SetWorkspaceRoot(mockRoot)
 
 	testPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
 	testURI := utils.PathToURI(testPath)
@@ -30,7 +33,7 @@ func TestStaticAnalyzerIndexesInheritedMethods(t *testing.T) {
 
 	data, err := os.ReadFile(testPath)
 	require.NoError(t, err)
-	require.NoError(t, doc.Update(data, nil))
+	require.NoError(t, doc.Update(data, nil, store))
 
 	index := doc.Index()
 	require.NotEmpty(t, index.PublicFunctions)
@@ -73,13 +76,19 @@ class One extends BarClass {}
 	doc := NewDocument()
 	mockRoot, err := filepath.Abs("../../mock")
 	require.NoError(t, err)
-	doc.SetWorkspaceRoot(mockRoot)
-	doc.SetAutoloadMap(config.AutoloadMap{
+
+	autoload := config.AutoloadMap{
 		PSR4: map[string][]string{
 			"VendorNamespace\\": {"vendor"},
 		},
-	})
-	require.NoError(t, doc.Update(code, nil))
+	}
+	store := NewDocumentStore(10)
+	store.Configure(autoload, mockRoot)
+	doc.SetURI("test.php")
+	doc.SetAutoloadMap(autoload)
+	doc.SetWorkspaceRoot(mockRoot)
+
+	require.NoError(t, doc.Update(code, nil, store))
 
 	var found bool
 	for _, info := range doc.Index().Classes {

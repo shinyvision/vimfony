@@ -83,7 +83,7 @@ func (a *phpAnalyzer) Changed(code []byte, change *sitter.InputEdit) error {
 	if a.doc == nil {
 		a.doc = php.NewDocument()
 	}
-	if err := a.doc.Update(code, change); err != nil {
+	if err := a.doc.Update(code, change, a.docStore); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -331,8 +331,8 @@ func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 		}
 	}
 
-	if className, ok := php.PathAt(content, pos); ok {
-		if locs, ok := resolveClassLocations(className, container, autoload); ok {
+	if className, ok := php.PathAt(a.docStore, a.path, pos); ok {
+		if locs, ok := resolveClassLocations(className, container, autoload, a.docStore); ok {
 			return locs, nil
 		}
 	}
@@ -552,7 +552,6 @@ func (a *phpAnalyzer) phpRouteContextAt(pos protocol.Position) (phpCallCtx, bool
 				switch candidate.Type() {
 				case "method_declaration", "function_definition", "function_declaration":
 					funcName = functionIdentifierContent(content, candidate)
-					break
 				}
 				if funcName != "" {
 					break
@@ -959,7 +958,7 @@ func canonicalTwigEnvironmentType(name string) (string, bool) {
 	if strings.ToLower(normalized) == target {
 		return twigEnvironmentFQN, true
 	}
-	if strings.ToLower(shortName(normalized)) == strings.ToLower(shortName(twigEnvironmentFQN)) {
+	if strings.EqualFold(shortName(normalized), shortName(twigEnvironmentFQN)) {
 		return twigEnvironmentFQN, true
 	}
 	return "", false
@@ -1120,7 +1119,7 @@ func (a *phpAnalyzer) resolveServiceDefinition(content string, pos protocol.Posi
 		return nil, false
 	}
 
-	return resolveServiceIDLocations(serviceID, container, autoload)
+	return resolveServiceIDLocations(serviceID, container, autoload, a.docStore)
 }
 
 func (a *phpAnalyzer) resolveRouteDefinition(pos protocol.Position) ([]protocol.Location, bool) {

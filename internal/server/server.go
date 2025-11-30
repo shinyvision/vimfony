@@ -144,6 +144,9 @@ func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams)
 			if ra, ok := doc.Analyzer.(analyzer.RoutesAware); ok {
 				ra.SetRoutes(&s.config.Routes)
 			}
+			if da, ok := doc.Analyzer.(analyzer.DocumentStoreAware); ok {
+				da.SetDocumentStore(s.docStore)
+			}
 		}
 	}
 

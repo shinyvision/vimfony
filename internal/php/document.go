@@ -12,8 +12,6 @@ import (
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
-const analysisDebounceInterval = 500 * time.Millisecond
-
 // Document maintains a parsed PHP syntax tree together with its static analysis index.
 // It owns the tree-sitter parser and decides when static analysis should be re-run.
 type Document struct {
@@ -77,57 +75,44 @@ func (d *Document) setContext(uri, root string, autoload config.AutoloadMap) {
 	}
 }
 
-// Update notifies the document about new file contents. If change is nil, the file
-// has been replaced entirely. Incremental edits can be provided via change.
-func (d *Document) Update(code []byte, change *sitter.InputEdit) error {
+// Update refreshes the document's content and AST.
+func (d *Document) Update(content []byte, change *sitter.InputEdit, store *DocumentStore) error {
 	d.mu.Lock()
+	defer d.mu.Unlock()
 
-	d.content = code
-	if d.tree != nil && change != nil {
-		d.tree.Edit(*change)
+	if d.tree == nil || change == nil {
+		// Full re-parse
+		if d.tree != nil {
+			d.tree.Close()
+		}
+		parser := sitter.NewParser()
+		lang := sitter.NewLanguage(phpforest.GetLanguage())
+		_ = parser.SetLanguage(lang)
+		tree, err := parser.ParseString(context.Background(), nil, content)
+		if err != nil {
+			return err
+		}
+		d.tree = tree
+		d.content = content
+		d.index = d.analyzer.Update(&d.content, d.tree, nil, store)
+		return nil
 	}
 
-	newTree, err := d.parser.ParseString(context.Background(), d.tree, code)
+	// Incremental re-parse
+	d.tree.Edit(*change)
+	parser := sitter.NewParser()
+	lang := sitter.NewLanguage(phpforest.GetLanguage())
+	_ = parser.SetLanguage(lang)
+	newTree, err := parser.ParseString(context.Background(), d.tree, content)
 	if err != nil {
-		d.mu.Unlock()
 		return err
 	}
-
-	if d.tree != nil {
-		d.tree.Close()
-	}
+	d.tree.Close()
 	d.tree = newTree
+	d.content = content
 
-	version := d.analysisVersion + 1
-	d.analysisVersion = version
-
-	if change == nil {
-		d.dirtyRanges = nil
-		if d.analysisTimer != nil {
-			d.analysisTimer.Stop()
-			d.analysisTimer = nil
-		}
-	} else {
-		d.recordDirtyRangeLocked(change)
-	}
-
-	immediate := change == nil
-
-	if !immediate {
-		if d.analysisTimer != nil {
-			d.analysisTimer.Stop()
-		}
-		d.analysisTimer = time.AfterFunc(analysisDebounceInterval, func() {
-			d.runAnalysis(version)
-		})
-	}
-
-	d.mu.Unlock()
-
-	if immediate {
-		d.runAnalysis(version)
-	}
-
+	dirty := []ByteRange{{Start: uint32(change.StartIndex), End: uint32(change.NewEndIndex)}}
+	d.index = d.analyzer.Update(&d.content, d.tree, dirty, store)
 	return nil
 }
 
@@ -189,42 +174,6 @@ func (d *Document) GetNodeAt(pos protocol.Position) (sitter.Node, []byte, Indexe
 
 	contentCopy := append([]byte(nil), d.content...)
 	return node, contentCopy, d.index, true
-}
-
-func (d *Document) runAnalysis(version int64) {
-	d.mu.RLock()
-	if d.analysisVersion != version || d.tree == nil {
-		d.mu.RUnlock()
-		return
-	}
-	treeCopy := d.tree.Copy()
-	dirty := append([]ByteRange(nil), d.dirtyRanges...)
-	contentCopy := append([]byte(nil), d.content...)
-	analyzer := d.analyzer
-	d.mu.RUnlock()
-
-	if analyzer == nil || treeCopy == nil {
-		if treeCopy != nil {
-			treeCopy.Close()
-		}
-		return
-	}
-	defer treeCopy.Close()
-
-	index := analyzer.Update(&contentCopy, treeCopy, dirty)
-
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.analysisVersion != version {
-		return
-	}
-	d.index = index
-	d.lastAnalyzed = version
-	d.dirtyRanges = nil
-	if d.analysisTimer != nil {
-		d.analysisTimer.Stop()
-		d.analysisTimer = nil
-	}
 }
 
 func (d *Document) recordDirtyRangeLocked(edit *sitter.InputEdit) {

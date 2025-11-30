@@ -69,3 +69,17 @@ func memberAccessPropertyName(node sitter.Node, content []byte) string {
 
 	return strings.TrimSpace(nameNode.Content(content))
 }
+
+func rangeFromNode(node sitter.Node) LineColumnRange {
+	if node.IsNull() {
+		return LineColumnRange{}
+	}
+	start := node.StartPoint()
+	end := node.EndPoint()
+	return LineColumnRange{
+		StartLine:   int(start.Row) + 1,
+		StartColumn: int(start.Column),
+		EndLine:     int(end.Row) + 1,
+		EndColumn:   int(end.Column),
+	}
+}

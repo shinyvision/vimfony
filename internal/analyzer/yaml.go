@@ -7,6 +7,7 @@ import (
 
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/twig"
 	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -17,6 +18,8 @@ type yamlAnalyzer struct {
 	content   string
 	container *config.ContainerConfig
 	autoload  config.AutoloadMap
+	store     *php.DocumentStore
+	path      string
 }
 
 func NewYamlAnalyzer() Analyzer {
@@ -44,6 +47,14 @@ func (a *yamlAnalyzer) SetAutoloadMap(autoload *config.AutoloadMap) {
 		return
 	}
 	a.autoload = *autoload
+}
+
+func (a *yamlAnalyzer) SetDocumentStore(store *php.DocumentStore) {
+	a.store = store
+}
+
+func (a *yamlAnalyzer) SetDocumentPath(path string) {
+	a.path = path
 }
 
 func (a *yamlAnalyzer) hasServicePrefix(pos protocol.Position) (bool, string) {
@@ -256,7 +267,7 @@ func (a *yamlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location,
 
 	if strings.HasPrefix(token, "@") {
 		serviceID := strings.TrimPrefix(token, "@")
-		if locs, ok := resolveServiceIDLocations(serviceID, a.container, a.autoload); ok {
+		if locs, ok := resolveServiceIDLocations(serviceID, a.container, a.autoload, a.store); ok {
 			return locs, nil
 		}
 		// fall through to consider remainder for classes or aliases without '@'
@@ -264,12 +275,12 @@ func (a *yamlAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location,
 	}
 
 	if strings.Contains(token, "\\") {
-		if locs, ok := resolveClassLocations(token, a.container, a.autoload); ok {
+		if locs, ok := resolveClassLocations(token, a.container, a.autoload, a.store); ok {
 			return locs, nil
 		}
 	}
 
-	if locs, ok := resolveServiceIDLocations(token, a.container, a.autoload); ok {
+	if locs, ok := resolveServiceIDLocations(token, a.container, a.autoload, a.store); ok {
 		return locs, nil
 	}
 

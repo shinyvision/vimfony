@@ -252,7 +252,7 @@ func TestTwigDefinitionForRouteControllerAction(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
-	path, _, ok := php.Resolve("VendorNamespace\\TestClass", autoload, container.WorkspaceRoot)
+	path, _, ok := php.Resolve(store, "VendorNamespace\\TestClass")
 	require.True(t, ok, "expected php.Resolve to succeed")
 	_, err = store.Get(path)
 	require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestTwigDefinitionForRouteControllerAction(t *testing.T) {
 	require.NotEmpty(t, locs)
 
 	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
-	expectedRange, ok := php.FindMethodRange(expectedPath, "index")
+	expectedRange, ok := php.FindMethodRange(store, expectedPath, "index")
 	require.True(t, ok)
 	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
 	require.Equal(t, expectedRange, locs[0].Range)
@@ -310,7 +310,7 @@ func TestTwigDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
-	path, _, ok := php.Resolve("VendorNamespace\\TestClass", autoload, container.WorkspaceRoot)
+	path, _, ok := php.Resolve(store, "VendorNamespace\\TestClass")
 	require.True(t, ok)
 	_, err = store.Get(path)
 	require.NoError(t, err)
@@ -329,7 +329,7 @@ func TestTwigDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 	require.NotEmpty(t, locs)
 
 	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
-	invokeRange, ok := php.FindMethodRange(expectedPath, "__invoke")
+	invokeRange, ok := php.FindMethodRange(store, expectedPath, "__invoke")
 	require.True(t, ok)
 	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
 	require.Equal(t, invokeRange, locs[0].Range)

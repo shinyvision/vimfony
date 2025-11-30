@@ -216,6 +216,7 @@ func TestPHPDefinitionForClassReference(t *testing.T) {
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
 	an.SetAutoloadMap(&autoload)
+	an.SetDocumentPath("/tmp/test.php")
 
 	require.NoError(t, an.Changed([]byte(content), nil))
 
@@ -254,6 +255,7 @@ func TestPHPDefinitionForServiceID(t *testing.T) {
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
 	an.SetAutoloadMap(&autoload)
+	an.SetDocumentPath("/tmp/test.php")
 
 	require.NoError(t, an.Changed([]byte(content), nil))
 
@@ -293,6 +295,7 @@ func TestPHPDefinitionForRouteControllerAction(t *testing.T) {
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
 	an.SetAutoloadMap(&autoload)
+	an.SetDocumentPath("/tmp/test.php")
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",
@@ -302,7 +305,7 @@ func TestPHPDefinitionForRouteControllerAction(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
-	path, _, ok := php.Resolve("VendorNamespace\\TestClass", autoload, container.WorkspaceRoot)
+	path, _, ok := php.Resolve(store, "VendorNamespace\\TestClass")
 	if !ok {
 		t.Fatalf("php.Resolve failed (root=%s map=%v)", container.WorkspaceRoot, autoload)
 	}
@@ -323,7 +326,7 @@ func TestPHPDefinitionForRouteControllerAction(t *testing.T) {
 	require.NotEmpty(t, locs)
 
 	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
-	expectedRange, ok := php.FindMethodRange(expectedPath, "index")
+	expectedRange, ok := php.FindMethodRange(store, expectedPath, "index")
 	require.True(t, ok)
 	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
 	require.Equal(t, expectedRange, locs[0].Range)
@@ -356,6 +359,7 @@ func TestPHPDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 	store.Configure(autoload, mockRoot)
 	an.SetDocumentStore(store)
 	an.SetAutoloadMap(&autoload)
+	an.SetDocumentPath("/tmp/test.php")
 	routes := config.RoutesMap{
 		"a_route": {
 			Name:       "a_route",
@@ -365,7 +369,7 @@ func TestPHPDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 		},
 	}
 	an.SetRoutes(&routes)
-	path, _, ok := php.Resolve("VendorNamespace\\TestClass", autoload, container.WorkspaceRoot)
+	path, _, ok := php.Resolve(store, "VendorNamespace\\TestClass")
 	require.True(t, ok, "expected php.Resolve to succeed")
 	_, err = store.Get(path)
 	require.NoError(t, err)
@@ -384,7 +388,7 @@ func TestPHPDefinitionForRouteControllerInvokeFallback(t *testing.T) {
 	require.NotEmpty(t, locs)
 
 	expectedPath := filepath.Join(mockRoot, "vendor", "TestClass.php")
-	invokeRange, ok := php.FindMethodRange(expectedPath, "__invoke")
+	invokeRange, ok := php.FindMethodRange(store, expectedPath, "__invoke")
 	require.True(t, ok)
 	require.Equal(t, protocol.DocumentUri(utils.PathToURI(expectedPath)), locs[0].URI)
 	require.Equal(t, invokeRange, locs[0].Range)
