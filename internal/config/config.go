@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 
 	"github.com/tliron/commonlog"
@@ -59,21 +61,42 @@ func (c *Config) LoadRoutesMap() {
 		return
 	}
 
-	containerPath := c.Container.ContainerXMLPaths[0]
-	if containerPath == "" {
-		return
-	}
-	if !filepath.IsAbs(containerPath) {
-		containerPath = filepath.Join(c.Container.WorkspaceRoot, containerPath)
+	c.Routes = make(RoutesMap)
+
+	loaded := 0
+	for idx, containerPath := range c.Container.ContainerXMLPaths {
+		if containerPath == "" {
+			continue
+		}
+		if !filepath.IsAbs(containerPath) {
+			containerPath = filepath.Join(c.Container.WorkspaceRoot, containerPath)
+		}
+
+		routesFile := filepath.Join(filepath.Dir(containerPath), "url_generating_routes.php")
+
+		if _, err := os.Stat(routesFile); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+
+			logger.Warningf("cannot access routes file for container_xml_path[%d] '%s': %v", idx, routesFile, err)
+			continue
+		}
+
+		routesMap, err := GetRoutesMap(routesFile, c.PhpPath)
+		if err != nil {
+			logger.Warningf("could not load routes map from '%s': %v", routesFile, err)
+			continue
+		}
+
+		for name, route := range routesMap {
+			c.Routes[name] = route
+		}
+
+		loaded++
 	}
 
-	routesFile := filepath.Join(filepath.Dir(containerPath), "url_generating_routes.php")
-	routesMap, err := GetRoutesMap(routesFile, c.PhpPath)
-	if err != nil {
-		logger.Warningf("could not load routes map: %v", err)
-		return
+	if loaded > 0 {
+		logger.Infof("loaded %d routes from %d route files", len(c.Routes), loaded)
 	}
-
-	c.Routes = routesMap
-	logger.Infof("loaded %d routes", len(c.Routes))
 }
