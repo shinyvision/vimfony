@@ -1,13 +1,13 @@
 package translations
 
 import (
-	"bufio"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/tliron/commonlog"
 	protocol "github.com/tliron/glsp/protocol_3_16"
+	"gopkg.in/yaml.v3"
 )
 
 type TranslationLocation struct {
@@ -36,77 +36,64 @@ func Parse(resources []string) TranslationMap {
 		}
 
 		logger.Debugf("parsing translation file: %s (domain: %s)", resource, domain)
-		parseYamlFile(resource, domain, translations)
+		parseYamlFile(resource, translations)
 	}
 
 	return translations
 }
 
-func parseYamlFile(path string, domain string, translations TranslationMap) {
+func parseYamlFile(path string, translations TranslationMap) {
 	file, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
-	lineNumber := 0
-
-	// Simple stack to keep track of nested keys
-	// This is a very basic YAML parser that assumes standard indentation
-	type stackItem struct {
-		indent int
-		key    string
+	var node yaml.Node
+	decoder := yaml.NewDecoder(file)
+	if err := decoder.Decode(&node); err != nil {
+		return
 	}
-	stack := []stackItem{}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimLeft(line, " ")
+	traverseYamlNode(&node, "", path, translations)
+}
 
-		// Skip comments and empty lines
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			lineNumber++
-			continue
+func traverseYamlNode(node *yaml.Node, prefix string, path string, translations TranslationMap) {
+	if node.Kind == yaml.DocumentNode {
+		for _, child := range node.Content {
+			traverseYamlNode(child, prefix, path, translations)
 		}
+		return
+	}
 
-		indent := len(line) - len(trimmed)
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i < len(node.Content); i += 2 {
+			keyNode := node.Content[i]
+			valueNode := node.Content[i+1]
 
-		// Parse key
-		parts := strings.SplitN(trimmed, ":", 2)
-		key := strings.TrimSpace(parts[0])
-		// Remove quotes if present
-		key = strings.Trim(key, `"'`)
-
-		// Manage stack based on indentation
-		for len(stack) > 0 && stack[len(stack)-1].indent >= indent {
-			stack = stack[:len(stack)-1]
-		}
-
-		// Build full key
-		fullKey := key
-		if len(stack) > 0 {
-			fullKey = stack[len(stack)-1].key + "." + key
-		}
-
-		// Add to stack
-		stack = append(stack, stackItem{indent: indent, key: fullKey})
-
-		// If it has a value, it's a leaf node (mostly)
-		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
-
-			// Store location
-			loc := TranslationLocation{
-				URI: "file://" + path,
-				Range: protocol.Range{
-					Start: protocol.Position{Line: uint32(lineNumber), Character: 0},
-					End:   protocol.Position{Line: uint32(lineNumber), Character: uint32(len(line))},
-				},
+			key := keyNode.Value
+			fullKey := key
+			if prefix != "" {
+				fullKey = prefix + "." + key
 			}
 
-			translations[fullKey] = append(translations[fullKey], loc)
-		}
+			switch valueNode.Kind {
+			case yaml.ScalarNode:
+				// Corrects for 1-based line / column
+				line := uint32(keyNode.Line - 1)
+				col := uint32(keyNode.Column - 1)
 
-		lineNumber++
+				loc := TranslationLocation{
+					URI: "file://" + path,
+					Range: protocol.Range{
+						Start: protocol.Position{Line: line, Character: col},
+						End:   protocol.Position{Line: line, Character: col + uint32(len(key))},
+					},
+				}
+				translations[fullKey] = append(translations[fullKey], loc)
+			case yaml.MappingNode:
+				traverseYamlNode(valueNode, fullKey, path, translations)
+			}
+		}
 	}
 }
