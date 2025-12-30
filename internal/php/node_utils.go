@@ -83,3 +83,18 @@ func rangeFromNode(node sitter.Node) LineColumnRange {
 		EndColumn:   int(end.Column),
 	}
 }
+
+func ToPascalCase(s string) string {
+	if s == "" {
+		return ""
+	}
+	parts := strings.Split(s, "_")
+	for i, part := range parts {
+		if len(part) > 0 {
+			head := part[:1]
+			tail := part[1:]
+			parts[i] = strings.ToUpper(head) + tail
+		}
+	}
+	return strings.Join(parts, "")
+}

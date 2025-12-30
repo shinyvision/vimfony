@@ -41,6 +41,7 @@ func NewServer() *Server {
 		TextDocumentDidClose:   s.didClose,
 		TextDocumentDefinition: s.onDefinition,
 		TextDocumentCompletion: s.onCompletion,
+		TextDocumentCodeAction: s.onCodeAction,
 	}
 	return s
 }

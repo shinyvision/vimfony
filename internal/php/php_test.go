@@ -1,8 +1,11 @@
 package php
 
 import (
+	"context"
 	"testing"
 
+	phpforest "github.com/alexaandru/go-sitter-forest/php"
+	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
 	"github.com/stretchr/testify/require"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -79,4 +82,25 @@ class MyClass {
 	path, ok := PathAt(store, dummyPath, protocol.Position{Line: 7, Character: 12}) // Middle of TestClass
 	require.True(t, ok)
 	require.Equal(t, "TestClass", path)
+}
+
+func TestUntypedPropertyCollection(t *testing.T) {
+	content := []byte(`<?php
+class Test {
+    private $unknown;
+}
+`)
+	parser := sitter.NewParser()
+	parser.SetLanguage(sitter.NewLanguage(phpforest.GetLanguage()))
+	tree, err := parser.ParseString(context.Background(), nil, content)
+	require.NoError(t, err)
+	defer tree.Close()
+
+	analyzer := NewStaticAnalyzer()
+	idx := analyzer.Update(&content, tree, nil, nil)
+
+	props := idx.Properties
+	require.Contains(t, props, "unknown")
+	require.NotEmpty(t, props["unknown"])
+	require.Equal(t, "", props["unknown"][0].Type)
 }

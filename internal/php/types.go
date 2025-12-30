@@ -77,6 +77,7 @@ type IndexedTree struct {
 	Variables          map[string]FunctionScope
 	Types              map[string][]TypeReference
 	Classes            map[uint32]ClassInfo
+	Uses               map[string]string
 	PrivateFunctions   []FunctionInfo
 	ProtectedFunctions []FunctionInfo
 	PublicFunctions    []FunctionInfo

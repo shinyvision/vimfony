@@ -4,6 +4,7 @@ import (
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
 	php "github.com/shinyvision/vimfony/internal/php"
+	"github.com/tliron/glsp"
 	protocol "github.com/tliron/glsp/protocol_3_16"
 )
 
@@ -24,6 +25,11 @@ type CompletionProvider interface {
 // DefinitionProvider is a sub-interface for analyzers that can provide definitions
 type DefinitionProvider interface {
 	OnDefinition(pos protocol.Position) ([]protocol.Location, error)
+}
+
+// CodeActionProvider is a sub-interface for analyzers that can provide code actions
+type CodeActionProvider interface {
+	OnCodeAction(context *glsp.Context, params *protocol.CodeActionParams) ([]protocol.CodeAction, error)
 }
 
 // ContainerAware is an interface for analyzers that need access to container configuration

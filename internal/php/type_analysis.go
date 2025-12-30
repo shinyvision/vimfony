@@ -100,6 +100,9 @@ func (ctx *analysisContext) addUseClause(clause sitter.Node, prefix string, uses
 	lowerAlias := strings.ToLower(alias)
 	if lowerAlias != "" {
 		uses[lowerAlias] = full
+		if alias != lowerAlias {
+			uses[alias] = full
+		}
 	}
 	uses[strings.ToLower(full)] = full
 }
@@ -135,8 +138,10 @@ func (ctx *analysisContext) collectTypeNames(typeNode sitter.Node, uses map[stri
 					names = append(names, raw)
 				}
 			}
-		case "nullable_type":
-			collect(n.ChildByFieldName("type"))
+		case "optional_type", "nullable_type":
+			for i := uint32(0); i < n.NamedChildCount(); i++ {
+				collect(n.NamedChild(i))
+			}
 			if _, ok := seen["null"]; !ok {
 				seen["null"] = struct{}{}
 				names = append(names, "null")
@@ -285,9 +290,7 @@ func mergeTypeOccurrences(existing, additions []TypeOccurrence) []TypeOccurrence
 		seen[key] = struct{}{}
 	}
 	for _, add := range additions {
-		if add.Type == "" {
-			continue
-		}
+		// We allow empty type for untyped properties
 		key := strings.ToLower(add.Type) + "#" + strconv.Itoa(add.Line)
 		if _, ok := seen[key]; ok {
 			continue

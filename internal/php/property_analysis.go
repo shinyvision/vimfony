@@ -44,12 +44,15 @@ func (ctx *analysisContext) propertyTypesFromDeclaration(node sitter.Node, uses 
 	result := make(map[string][]TypeOccurrence)
 	content := ctx.bytes()
 
+	var typeNames []string
 	typeNode := node.ChildByFieldName("type")
-	if typeNode.IsNull() {
-		return result
+	if !typeNode.IsNull() {
+		typeNames = ctx.collectTypeNames(typeNode, uses)
+	} else {
+		// Untyped property
+		typeNames = []string{""}
 	}
 
-	typeNames := ctx.collectTypeNames(typeNode, uses)
 	if len(typeNames) == 0 {
 		return result
 	}
@@ -80,7 +83,15 @@ func (ctx *analysisContext) propertyTypeFromPromotion(node sitter.Node, uses map
 
 	typeNode := node.ChildByFieldName("type")
 	if typeNode.IsNull() {
-		return "", nil, false
+		// Untyped property
+		nameNode := node.ChildByFieldName("name")
+		name := VariableNameFromNode(nameNode, content)
+		if name == "" {
+			return "", nil, false
+		}
+		line := int(node.StartPoint().Row) + 1
+		occ := []TypeOccurrence{{Type: "", Line: line}}
+		return name, occ, true
 	}
 
 	typeNames := ctx.collectTypeNames(typeNode, uses)

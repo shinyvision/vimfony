@@ -25,6 +25,7 @@ func NewStaticAnalyzer() *StaticAnalyzer {
 			Variables:          make(map[string]FunctionScope),
 			Types:              make(map[string][]TypeReference),
 			Classes:            make(map[uint32]ClassInfo),
+			Uses:               make(map[string]string),
 			PrivateFunctions:   nil,
 			ProtectedFunctions: nil,
 			PublicFunctions:    nil,
@@ -55,6 +56,7 @@ func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []Byte
 			Variables:          make(map[string]FunctionScope),
 			Types:              make(map[string][]TypeReference),
 			Classes:            make(map[uint32]ClassInfo),
+			Uses:               make(map[string]string),
 			PrivateFunctions:   nil,
 			ProtectedFunctions: nil,
 			PublicFunctions:    nil,
@@ -69,11 +71,13 @@ func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []Byte
 		vars := ctx.collectFunctionVariableTypes(props)
 		classes := ctx.collectClassInfo()
 		priv, prot, pub := ctx.collectFunctionInfos(classes)
+		uses := ctx.collectNamespaceUses(tree.RootNode())
 		a.index = IndexedTree{
 			Properties:         props,
 			Variables:          vars,
 			Types:              computeTypeReferences(props, vars),
 			Classes:            classes,
+			Uses:               uses,
 			PrivateFunctions:   priv,
 			ProtectedFunctions: prot,
 			PublicFunctions:    pub,
@@ -88,6 +92,9 @@ func (a *StaticAnalyzer) Update(content *[]byte, tree *sitter.Tree, dirty []Byte
 	classes := cloneClassIndex(a.index.Classes)
 
 	index := ctx.updateIndex(props, vars, classes, dirty)
+	// Refresh uses for the whole file
+	index.Uses = ctx.collectNamespaceUses(tree.RootNode())
+
 	priv, prot, pub := ctx.collectFunctionInfos(index.Classes)
 	index.PrivateFunctions = priv
 	index.ProtectedFunctions = prot
