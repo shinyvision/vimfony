@@ -287,3 +287,133 @@ func TestQueryBuilderPropertyDocumentation(t *testing.T) {
 	require.Contains(t, notImportantDoc, "private int $notImportant")
 	require.NotContains(t, notImportantDoc, "$channel") // should not leak previous property
 }
+
+func TestQueryBuilderJoinOnlyShowsAssociations(t *testing.T) {
+	inlineContent := `<?php
+namespace App\Repository;
+
+class UserRepository
+{
+    public function find()
+    {
+        $qb = $this->createQueryBuilder('u');
+        $qb->join('u.', 'a');
+    }
+}
+`
+	an := prepareQueryBuilderTest(t, "/tmp/UserRepository.php", inlineContent)
+
+	pos := positionAfter(t, []byte(inlineContent), "'u.", 3)
+
+	items, err := an.OnCompletion(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, items)
+
+	var labels []string
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+
+	// Only associations should appear in join methods
+	require.Contains(t, labels, "address")
+	require.Contains(t, labels, "addresses")
+	require.Contains(t, labels, "channels")
+
+	// Non-association fields must NOT appear
+	require.NotContains(t, labels, "id")
+	require.NotContains(t, labels, "email")
+}
+
+func TestQueryBuilderDefinitionOnOwnField(t *testing.T) {
+	content, err := os.ReadFile("../../mock/Repository/UserRepository.php")
+	require.NoError(t, err)
+
+	an := prepareQueryBuilderTest(t, "/tmp/UserRepository.php", string(content))
+
+	// Cursor on "id" in "$qb->where('u.id = 1')"
+	pos := positionAfter(t, content, "u.id", 3)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	uri := string(locs[0].URI)
+	require.Contains(t, uri, "Entity/User.php")
+
+	// $id is on line 12
+	require.Equal(t, uint32(11), locs[0].Range.Start.Line)
+	require.Equal(t, uint32(16), locs[0].Range.Start.Character) // column of '$'
+	require.Equal(t, uint32(19), locs[0].Range.End.Character)   // end of '$id'
+}
+
+func TestQueryBuilderDefinitionOnJoinedField(t *testing.T) {
+	content, err := os.ReadFile("../../mock/Repository/UserRepository.php")
+	require.NoError(t, err)
+
+	an := prepareQueryBuilderTest(t, "/tmp/UserRepository.php", string(content))
+
+	// Cursor on "street" in "$qb->andWhere('a.street = :street')"
+	pos := positionAfter(t, content, "a.street =", 4)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs)
+
+	uri := string(locs[0].URI)
+	require.Contains(t, uri, "Entity/Address.php")
+
+	// $street is on line 9
+	require.Equal(t, uint32(8), locs[0].Range.Start.Line)
+	require.Equal(t, uint32(19), locs[0].Range.Start.Character) // column of '$'
+	require.Equal(t, uint32(26), locs[0].Range.End.Character)   // end of '$street'
+}
+
+func TestQueryBuilderDefinitionOnInheritedField(t *testing.T) {
+	inlineContent := `<?php
+namespace App\Repository;
+
+use App\Entity\User;
+
+class UserRepository
+{
+    public function findByChannel()
+    {
+        $qb = $this->createQueryBuilder('u');
+        $qb->join('u.channels', 'c');
+        $qb->andWhere('c.code = :code');
+    }
+}
+`
+	an := prepareQueryBuilderTest(t, "/tmp/UserRepository.php", inlineContent)
+
+	pos := positionAfter(t, []byte(inlineContent), "c.code", 4)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, locs, "should resolve inherited field from XML-mapped AbstractChannel")
+
+	uri := string(locs[0].URI)
+	require.Contains(t, uri, "Entity/AbstractChannel.php")
+}
+
+func TestQueryBuilderDefinitionOnUnmappedField(t *testing.T) {
+	inlineContent := `<?php
+namespace App\Repository;
+
+class UserRepository
+{
+    public function find()
+    {
+        $qb = $this->createQueryBuilder('u');
+        $qb->where('u.nonexistent = 1');
+    }
+}
+`
+	an := prepareQueryBuilderTest(t, "/tmp/UserRepository.php", inlineContent)
+
+	pos := positionAfter(t, []byte(inlineContent), "u.nonexistent", 5)
+
+	locs, err := an.OnDefinition(pos)
+	require.NoError(t, err)
+	require.Empty(t, locs, "should return nothing for unmapped field")
+}

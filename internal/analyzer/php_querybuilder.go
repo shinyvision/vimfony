@@ -6,6 +6,7 @@ import (
 
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	"github.com/shinyvision/vimfony/internal/doctrine"
 	"github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/utils"
 	protocol "github.com/tliron/glsp/protocol_3_16"
@@ -25,9 +26,10 @@ var qbJoinMethods = map[string]bool{
 }
 
 var qbAliasRegex = regexp.MustCompile(`([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]*)$`)
+var qbFieldRegex = regexp.MustCompile(`([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)`)
 
 func (a *phpAnalyzer) queryBuilderCompletionItems(pos protocol.Position) []protocol.CompletionItem {
-	found, alias, prefix, callNode := a.isTypingQueryBuilderProperty(pos)
+	found, alias, prefix, isJoin, callNode := a.isTypingQueryBuilderProperty(pos)
 	if !found || alias == "" {
 		return nil
 	}
@@ -37,20 +39,20 @@ func (a *phpAnalyzer) queryBuilderCompletionItems(pos protocol.Position) []proto
 		return nil
 	}
 
-	return a.entityPropertyCompletionItems(entityFQN, prefix)
+	return a.entityPropertyCompletionItems(entityFQN, prefix, isJoin)
 }
 
-func (a *phpAnalyzer) isTypingQueryBuilderProperty(pos protocol.Position) (bool, string, string, sitter.Node) {
+func (a *phpAnalyzer) isTypingQueryBuilderProperty(pos protocol.Position) (bool, string, string, bool, sitter.Node) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
 	if a.doc == nil {
-		return false, "", "", sitter.Node{}
+		return false, "", "", false, sitter.Node{}
 	}
 
 	node, content, _, ok := a.doc.GetNodeAt(pos)
 	if !ok {
-		return false, "", "", sitter.Node{}
+		return false, "", "", false, sitter.Node{}
 	}
 
 	var str sitter.Node
@@ -105,12 +107,12 @@ func (a *phpAnalyzer) isTypingQueryBuilderProperty(pos protocol.Position) (bool,
 
 		matches := qbAliasRegex.FindStringSubmatch(typedContent)
 		if len(matches) == 3 {
-			return true, matches[1], matches[2], callNode
+			return true, matches[1], matches[2], qbJoinMethods[methodName], callNode
 		}
-		return false, "", "", sitter.Node{}
+		return false, "", "", false, sitter.Node{}
 	}
 
-	return false, "", "", sitter.Node{}
+	return false, "", "", false, sitter.Node{}
 }
 
 func walkSitterTreePostOrder(node sitter.Node, cb func(n sitter.Node)) {
@@ -361,7 +363,7 @@ type propertySource struct {
 	srcLines []string
 }
 
-func (a *phpAnalyzer) entityPropertyCompletionItems(entityFQN string, prefix string) []protocol.CompletionItem {
+func (a *phpAnalyzer) entityPropertyCompletionItems(entityFQN string, prefix string, associationsOnly bool) []protocol.CompletionItem {
 	a.mu.RLock()
 	autoload := a.autoload
 	container := a.container
@@ -402,6 +404,9 @@ func (a *phpAnalyzer) entityPropertyCompletionItems(entityFQN string, prefix str
 	kind := protocol.CompletionItemKindProperty
 
 	for _, mf := range mappedFields {
+		if associationsOnly && mf.Kind != doctrine.FieldKindAssociation {
+			continue
+		}
 		if prefix != "" && !strings.HasPrefix(mf.Name, prefix) {
 			continue
 		}
@@ -452,6 +457,193 @@ func buildPropertyDocumentation(occs []php.TypeOccurrence, srcLines []string) st
 
 	sb.WriteString("```")
 	return sb.String()
+}
+
+func (a *phpAnalyzer) queryBuilderDefinition(pos protocol.Position) ([]protocol.Location, bool) {
+	found, alias, fieldName, callNode := a.queryBuilderFieldAtCursor(pos)
+	if !found || alias == "" || fieldName == "" {
+		return nil, false
+	}
+
+	entityFQN := a.resolveQueryBuilderAliasEntity(alias, callNode)
+	if entityFQN == "" {
+		return nil, false
+	}
+
+	a.mu.RLock()
+	store := a.docStore
+	doctrineReg := a.doctrine
+	a.mu.RUnlock()
+
+	if doctrineReg == nil || store == nil {
+		return nil, false
+	}
+
+	mappedFields := doctrineReg.MappedFields(entityFQN)
+	isMapped := false
+	for _, mf := range mappedFields {
+		if mf.Name == fieldName {
+			isMapped = true
+			break
+		}
+	}
+	if !isMapped {
+		return nil, false
+	}
+
+	loc, ok := a.resolvePropertyLocation(entityFQN, fieldName, store)
+	if !ok {
+		return nil, false
+	}
+	return []protocol.Location{loc}, true
+}
+
+func (a *phpAnalyzer) queryBuilderFieldAtCursor(pos protocol.Position) (bool, string, string, sitter.Node) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.doc == nil {
+		return false, "", "", sitter.Node{}
+	}
+
+	node, content, _, ok := a.doc.GetNodeAt(pos)
+	if !ok {
+		return false, "", "", sitter.Node{}
+	}
+
+	var str sitter.Node
+	for cur := node; !cur.IsNull(); cur = cur.Parent() {
+		if str.IsNull() {
+			switch cur.Type() {
+			case "string":
+				str = cur
+			case "string_content":
+				parent := cur.Parent()
+				if !parent.IsNull() && parent.Type() == "string" {
+					str = parent
+				}
+			}
+		}
+
+		if cur.Type() != "argument" {
+			continue
+		}
+
+		argsNode := cur.Parent()
+		if argsNode.IsNull() || argsNode.Type() != "arguments" {
+			continue
+		}
+
+		callNode := argsNode.Parent()
+		for !callNode.IsNull() && callNode.Type() != "member_call_expression" {
+			callNode = callNode.Parent()
+		}
+		if callNode.IsNull() || callNode.Type() != "member_call_expression" {
+			continue
+		}
+
+		nameNode := callNode.ChildByFieldName("name")
+		if nameNode.IsNull() {
+			continue
+		}
+
+		methodName := strings.TrimSpace(nameNode.Content(content))
+		if !qbMethods[methodName] && !qbJoinMethods[methodName] {
+			continue
+		}
+
+		if str.IsNull() {
+			continue
+		}
+
+		sb, eb := int(str.StartByte()), int(str.EndByte())
+		if eb-sb < 2 {
+			continue
+		}
+		inner := string(content[sb+1 : eb-1])
+		caret := lspPosToByteOffset(content, pos)
+		rel := caret - sb - 1
+		if rel < 0 || rel > len(inner) {
+			continue
+		}
+
+		for _, idx := range qbFieldRegex.FindAllStringSubmatchIndex(inner, -1) {
+			if rel >= idx[0] && rel <= idx[1] {
+				alias := inner[idx[2]:idx[3]]
+				field := inner[idx[4]:idx[5]]
+				return true, alias, field, callNode
+			}
+		}
+		return false, "", "", sitter.Node{}
+	}
+
+	return false, "", "", sitter.Node{}
+}
+
+func (a *phpAnalyzer) resolvePropertyLocation(entityFQN, propertyName string, store *php.DocumentStore) (protocol.Location, bool) {
+	visited := make(map[string]bool)
+	return a.findPropertyInHierarchy(entityFQN, propertyName, store, visited)
+}
+
+func (a *phpAnalyzer) findPropertyInHierarchy(classFQN, propertyName string, store *php.DocumentStore, visited map[string]bool) (protocol.Location, bool) {
+	fqn := normalizeFQN(classFQN)
+	if fqn == "" || visited[strings.ToLower(fqn)] {
+		return protocol.Location{}, false
+	}
+	visited[strings.ToLower(fqn)] = true
+
+	autoload, root := store.Config()
+	path, ok := config.AutoloadResolve(fqn, autoload, root)
+	if !ok || path == "" {
+		return protocol.Location{}, false
+	}
+
+	doc, err := store.Get(path)
+	if err != nil || doc == nil {
+		return protocol.Location{}, false
+	}
+
+	var propLine int
+	var propCol int
+	var extends []string
+	target := "$" + propertyName
+
+	doc.Read(func(_ *sitter.Tree, content []byte, index php.IndexedTree) {
+		if occs, ok := index.Properties[propertyName]; ok && len(occs) > 0 {
+			propLine = occs[len(occs)-1].Line
+		}
+		for _, cls := range index.Classes {
+			extends = cls.Extends
+			break
+		}
+		if propLine > 0 {
+			lines := strings.SplitN(string(content), "\n", propLine+1)
+			if propLine <= len(lines) {
+				col := strings.Index(lines[propLine-1], target)
+				if col >= 0 {
+					propCol = col
+				}
+			}
+		}
+	})
+
+	if propLine > 0 {
+		return protocol.Location{
+			URI: protocol.DocumentUri(utils.PathToURI(path)),
+			Range: protocol.Range{
+				Start: protocol.Position{Line: uint32(propLine - 1), Character: uint32(propCol)},
+				End:   protocol.Position{Line: uint32(propLine - 1), Character: uint32(propCol + len(target))},
+			},
+		}, true
+	}
+
+	for _, parent := range extends {
+		if loc, ok := a.findPropertyInHierarchy(parent, propertyName, store, visited); ok {
+			return loc, true
+		}
+	}
+
+	return protocol.Location{}, false
 }
 
 func extractPropertyContext(srcLines []string, propLine int) []string {

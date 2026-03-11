@@ -334,6 +334,10 @@ func (a *phpAnalyzer) OnDefinition(pos protocol.Position) ([]protocol.Location, 
 		return locs, nil
 	}
 
+	if locs, ok := a.queryBuilderDefinition(pos); ok {
+		return locs, nil
+	}
+
 	if twigPath, ok := twig.PathAt(content, pos); ok {
 		if target, ok := twig.Resolve(twigPath, container); ok {
 			loc := protocol.Location{

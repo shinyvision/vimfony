@@ -10,6 +10,7 @@ class UserRepository
         $qb = $this->createQueryBuilder('u');
         $qb->join('u.address', 'a');
         $qb->where('u.id = 1');
+        $qb->andWhere('a.street = :street');
         $qb->andWhere('a.');
     }
 
