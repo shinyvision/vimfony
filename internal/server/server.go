@@ -16,7 +16,7 @@ import (
 
 const lsName = "vimfony"
 
-var version = "0.0.6"
+var version = "0.1.0"
 
 type Server struct {
 	config   *config.Config
