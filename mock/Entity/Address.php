@@ -11,6 +11,9 @@ class Address {
     #[ORM\Column]
     private string $city;
 
+    #[ORM\ManyToOne(targetEntity: User::class)]
+    private User $user;
+
     /** Not a Doctrine field — should NOT appear in QB completions */
     private string $internalNote;
 }

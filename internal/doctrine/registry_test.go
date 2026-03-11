@@ -45,6 +45,7 @@ func setupMockRegistry(t *testing.T) *Registry {
 		autoload,
 		mockRoot,
 		store,
+		nil,
 	)
 	return reg
 }
@@ -196,4 +197,56 @@ func TestRegistry_AssociationTargetEntity(t *testing.T) {
 
 	target = reg.AssociationTargetEntity("App\\Entity\\User", "nonexistent")
 	assert.Empty(t, target)
+}
+
+func TestRegistry_ResolveTargetEntity(t *testing.T) {
+	mockRoot, err := filepath.Abs("../../mock")
+	require.NoError(t, err)
+
+	autoload := config.AutoloadMap{
+		PSR4: map[string][]string{
+			"App\\": {""},
+		},
+	}
+
+	store := php.NewDocumentStore(10)
+	store.Configure(autoload, mockRoot)
+
+	entityDir := filepath.Join(mockRoot, "Entity")
+	xmlDir := filepath.Join(mockRoot, "vendor", "doctrine")
+
+	reg := NewRegistry()
+	reg.Configure(
+		[]config.DoctrineDriverMapping{
+			{
+				Kind:      config.DriverKindAttribute,
+				Namespace: "App\\Entity",
+				Paths:     []string{entityDir},
+			},
+			{
+				Kind:      config.DriverKindXML,
+				Namespace: "App\\Entity",
+				Paths:     []string{xmlDir},
+			},
+		},
+		autoload,
+		mockRoot,
+		store,
+		map[string]string{
+			"App\\Entity\\AddressInterface": "App\\Entity\\Address",
+		},
+	)
+
+	// MappedFields should resolve an interface FQN to the concrete entity's fields
+	fields := reg.MappedFields("App\\Entity\\AddressInterface")
+	require.NotEmpty(t, fields, "should resolve interface to concrete entity via resolve_target_entities")
+
+	fm := fieldsByName(fields)
+	assert.Contains(t, fm, "street")
+	assert.Contains(t, fm, "city")
+
+	// AssociationTargetEntity should resolve interface target entities
+	// AbstractChannel.orm.xml has currencies with target-entity="App\Entity\AddressInterface"
+	target := reg.AssociationTargetEntity("App\\Entity\\Channel", "currencies")
+	assert.Equal(t, "App\\Entity\\Address", target, "should resolve interface to concrete class")
 }

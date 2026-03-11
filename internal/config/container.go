@@ -19,21 +19,22 @@ import (
 )
 
 type ContainerConfig struct {
-	WorkspaceRoot     string
-	ContainerXMLPaths []string
-	Roots             []string
-	BundleRoots       map[string][]string
-	ServiceClasses    map[string]string
-	ServiceAliases    map[string]string
-	TwigFunctions     map[string]protocol.Location
-	ServiceReferences map[string]int
-	TranslationRoots  []string
-	TranslationKeys   translations.TranslationMap
-	DefaultLocale     string
-	DoctrineDrivers   []DoctrineDriverMapping
-	twigTemplates     []string
-	twigTemplateSig   string
-	twigMu            sync.Mutex
+	WorkspaceRoot         string
+	ContainerXMLPaths     []string
+	Roots                 []string
+	BundleRoots           map[string][]string
+	ServiceClasses        map[string]string
+	ServiceAliases        map[string]string
+	TwigFunctions         map[string]protocol.Location
+	ServiceReferences     map[string]int
+	TranslationRoots      []string
+	TranslationKeys       translations.TranslationMap
+	DefaultLocale         string
+	DoctrineDrivers       []DoctrineDriverMapping
+	ResolveTargetEntities map[string]string
+	twigTemplates         []string
+	twigTemplateSig       string
+	twigMu                sync.Mutex
 }
 
 const targetServiceID = "twig.loader.native_filesystem"
@@ -47,15 +48,16 @@ type containerLoadStats struct {
 
 func NewContainerConfig() *ContainerConfig {
 	return &ContainerConfig{
-		Roots:             []string{"templates"},
-		TranslationRoots:  []string{"translations"},
-		BundleRoots:       make(map[string][]string),
-		ServiceClasses:    make(map[string]string),
-		ServiceAliases:    make(map[string]string),
-		TwigFunctions:     make(map[string]protocol.Location),
-		ServiceReferences: make(map[string]int),
-		TranslationKeys:   make(translations.TranslationMap),
-		DefaultLocale:     "en",
+		Roots:                 []string{"templates"},
+		TranslationRoots:     []string{"translations"},
+		BundleRoots:          make(map[string][]string),
+		ServiceClasses:       make(map[string]string),
+		ServiceAliases:       make(map[string]string),
+		TwigFunctions:        make(map[string]protocol.Location),
+		ServiceReferences:    make(map[string]int),
+		TranslationKeys:      make(translations.TranslationMap),
+		DefaultLocale:        "en",
+		ResolveTargetEntities: make(map[string]string),
 	}
 }
 
@@ -88,6 +90,7 @@ func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 	c.ServiceReferences = make(map[string]int)
 	c.TwigFunctions = make(map[string]protocol.Location)
 	c.DoctrineDrivers = nil
+	c.ResolveTargetEntities = make(map[string]string)
 	c.twigMu.Lock()
 	c.twigTemplates = nil
 	c.twigTemplateSig = ""
@@ -337,7 +340,7 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 						break
 					}
 				}
-				if method == "addDriver" && len(docServiceStack) > 0 {
+				if (method == "addDriver" || method == "addResolveTargetEntity") && len(docServiceStack) > 0 {
 					docInCall = true
 					docCallMethod = method
 					docCallArgs = docCallArgs[:0]
@@ -476,6 +479,13 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 							dc.addDriverCalls[svcID],
 							[2]string{docCallArgs[0], docCallArgs[1]},
 						)
+					}
+				}
+				if docCallMethod == "addResolveTargetEntity" && len(docCallArgs) >= 2 {
+					ifaceFQN := strings.TrimLeft(strings.TrimSpace(docCallArgs[0]), "\\")
+					concreteFQN := strings.TrimLeft(strings.TrimSpace(docCallArgs[1]), "\\")
+					if ifaceFQN != "" && concreteFQN != "" {
+						c.ResolveTargetEntities[ifaceFQN] = concreteFQN
 					}
 				}
 				docInCall = false

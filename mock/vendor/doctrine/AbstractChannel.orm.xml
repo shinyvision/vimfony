@@ -7,5 +7,6 @@
         <field name="code" type="string" unique="true"/>
         <field name="name" type="string"/>
         <field name="enabled" type="boolean"/>
+        <many-to-many field="currencies" target-entity="App\Entity\AddressInterface"/>
     </mapped-superclass>
 </doctrine-mapping>

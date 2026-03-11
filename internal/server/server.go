@@ -119,6 +119,7 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 		s.config.Autoload,
 		s.config.Container.WorkspaceRoot,
 		s.docStore,
+		s.config.Container.ResolveTargetEntities,
 	)
 
 	logPathStats(s.config, "initialize")

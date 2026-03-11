@@ -55,6 +55,9 @@ func prepareQueryBuilderTest(t *testing.T, uri, fileContent string) *phpAnalyzer
 		autoload,
 		mockRoot,
 		store,
+		map[string]string{
+			"App\\Entity\\AddressInterface": "App\\Entity\\Address",
+		},
 	)
 	an.SetDoctrineRegistry(reg)
 
@@ -286,6 +289,46 @@ func TestQueryBuilderPropertyDocumentation(t *testing.T) {
 	notImportantDoc := docMap["notImportant"]
 	require.Contains(t, notImportantDoc, "private int $notImportant")
 	require.NotContains(t, notImportantDoc, "$channel") // should not leak previous property
+}
+
+func TestQueryBuilderNestedChainedJoinCompletion(t *testing.T) {
+	inlineContent := `<?php
+namespace App\Service;
+
+use App\Entity\User;
+
+class SomeService
+{
+    private $entityManager;
+
+    public function findNested()
+    {
+        $result = $this->entityManager->getRepository(User::class)
+            ->createQueryBuilder('u')
+            ->join('u.channels', 'c')
+            ->join('c.currencies', 'cur')
+            ->andWhere('cur.')
+            ->getQuery()
+            ->getOneOrNullResult();
+    }
+}
+`
+	an := prepareQueryBuilderTest(t, "/tmp/SomeService.php", inlineContent)
+
+	pos := positionAfter(t, []byte(inlineContent), "'cur.", 5)
+
+	items, err := an.OnCompletion(pos)
+	require.NoError(t, err)
+	require.NotEmpty(t, items, "should resolve nested join where intermediate association is inherited from XML-mapped parent")
+
+	var labels []string
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+
+	// currencies targets Address, so we should get Address fields
+	require.Contains(t, labels, "street")
+	require.Contains(t, labels, "city")
 }
 
 func TestQueryBuilderJoinOnlyShowsAssociations(t *testing.T) {

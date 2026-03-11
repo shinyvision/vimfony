@@ -11,11 +11,12 @@ import (
 )
 
 type Registry struct {
-	mu       sync.RWMutex
-	drivers  []config.DoctrineDriverMapping
-	autoload config.AutoloadMap
-	root     string
-	store    *php.DocumentStore
+	mu                    sync.RWMutex
+	drivers               []config.DoctrineDriverMapping
+	autoload              config.AutoloadMap
+	root                  string
+	store                 *php.DocumentStore
+	resolveTargetEntities map[string]string
 }
 
 func NewRegistry() *Registry {
@@ -27,6 +28,7 @@ func (r *Registry) Configure(
 	autoload config.AutoloadMap,
 	root string,
 	store *php.DocumentStore,
+	resolveTargetEntities map[string]string,
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -34,6 +36,7 @@ func (r *Registry) Configure(
 	r.autoload = autoload
 	r.root = root
 	r.store = store
+	r.resolveTargetEntities = resolveTargetEntities
 }
 
 func (r *Registry) MappedFields(fqn string) []MappedField {
@@ -42,11 +45,16 @@ func (r *Registry) MappedFields(fqn string) []MappedField {
 	autoload := r.autoload
 	root := r.root
 	store := r.store
+	rte := r.resolveTargetEntities
 	r.mu.RUnlock()
 
 	fqn = normalizeFQN(fqn)
 	if fqn == "" {
 		return nil
+	}
+
+	if resolved, ok := rte[fqn]; ok {
+		fqn = normalizeFQN(resolved)
 	}
 
 	ctx := &resolveContext{
@@ -61,9 +69,17 @@ func (r *Registry) MappedFields(fqn string) []MappedField {
 }
 
 func (r *Registry) AssociationTargetEntity(entityFQN, fieldName string) string {
+	r.mu.RLock()
+	rte := r.resolveTargetEntities
+	r.mu.RUnlock()
+
 	fields := r.MappedFields(entityFQN)
 	for _, f := range fields {
 		if f.Name == fieldName && f.TargetEntity != "" {
+			target := normalizeFQN(f.TargetEntity)
+			if resolved, ok := rte[target]; ok {
+				return resolved
+			}
 			return f.TargetEntity
 		}
 	}
@@ -158,6 +174,9 @@ func (ctx *resolveContext) resolve(fqn string) []MappedField {
 	}
 
 	for _, f := range own {
+		if existing, ok := fieldMap[f.Name]; ok && f.TargetEntity == "" && existing.TargetEntity != "" {
+			f.TargetEntity = existing.TargetEntity
+		}
 		fieldMap[f.Name] = f
 	}
 
