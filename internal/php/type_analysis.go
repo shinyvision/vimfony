@@ -107,12 +107,10 @@ func (ctx *analysisContext) addUseClause(clause sitter.Node, prefix string, uses
 	uses[strings.ToLower(full)] = full
 }
 
-func (ctx *analysisContext) collectTypeNames(typeNode sitter.Node, uses map[string]string) []string {
+func CollectTypeNames(typeNode sitter.Node, content []byte, uses map[string]string) []string {
 	if typeNode.IsNull() {
 		return nil
 	}
-
-	content := ctx.bytes()
 	names := make([]string, 0)
 	seen := make(map[string]struct{})
 	var collect func(n sitter.Node)
@@ -122,7 +120,7 @@ func (ctx *analysisContext) collectTypeNames(typeNode sitter.Node, uses map[stri
 		}
 		switch n.Type() {
 		case "named_type":
-			if resolved := ctx.resolveNamedType(n, uses); resolved != "" {
+			if resolved := ResolveNamedType(n, content, uses); resolved != "" {
 				key := strings.ToLower(resolved)
 				if _, ok := seen[key]; !ok {
 					seen[key] = struct{}{}
@@ -155,7 +153,7 @@ func (ctx *analysisContext) collectTypeNames(typeNode sitter.Node, uses map[stri
 			if candidate == "" {
 				break
 			}
-			resolved := ctx.resolveRawTypeName(candidate, uses)
+			resolved := ResolveRawTypeName(candidate, uses)
 			if resolved == "" {
 				break
 			}
@@ -176,7 +174,7 @@ func (ctx *analysisContext) collectTypeNames(typeNode sitter.Node, uses map[stri
 	return names
 }
 
-func (ctx *analysisContext) resolveNamedType(node sitter.Node, uses map[string]string) string {
+func ResolveNamedType(node sitter.Node, content []byte, uses map[string]string) string {
 	var typeNode sitter.Node
 	for i := uint32(0); i < node.NamedChildCount(); i++ {
 		child := node.NamedChild(i)
@@ -189,7 +187,6 @@ func (ctx *analysisContext) resolveNamedType(node sitter.Node, uses map[string]s
 		}
 	}
 
-	content := ctx.bytes()
 	raw := ""
 	if !typeNode.IsNull() {
 		raw = typeNode.Content(content)
@@ -215,7 +212,7 @@ func (ctx *analysisContext) resolveNamedType(node sitter.Node, uses map[string]s
 	return raw
 }
 
-func (ctx *analysisContext) resolveRawTypeName(raw string, uses map[string]string) string {
+func ResolveRawTypeName(raw string, uses map[string]string) string {
 	raw = normalizeFQN(raw)
 	if raw == "" {
 		return ""

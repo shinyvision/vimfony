@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<doctrine-mapping xmlns="http://doctrine-project.org/schemas/orm/doctrine-mapping">
+    <entity name="App\Entity\Subscription" table="subscription">
+        <id name="id" column="id" type="integer">
+            <generator strategy="AUTO"/>
+        </id>
+        <field name="state" type="string"/>
+        <field name="createdAt" type="datetime" column="created_at"/>
+        <many-to-one field="customer" target-entity="App\Entity\User"/>
+        <one-to-many field="payments" target-entity="App\Entity\Order" mapped-by="subscription"/>
+        <many-to-many field="channels" target-entity="App\Entity\Channel"/>
+        <one-to-one field="config" target-entity="App\Entity\Address"/>
+    </entity>
+</doctrine-mapping>

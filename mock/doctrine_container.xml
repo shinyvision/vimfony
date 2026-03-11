@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<container xmlns="http://symfony.com/schema/dic/services">
+    <services>
+        <service id="doctrine.orm.default_metadata_driver" alias=".doctrine.orm.default_metadata_driver"/>
+
+        <service id=".doctrine.orm.default_metadata_driver" class="Doctrine\Bundle\DoctrineBundle\Mapping\MappingDriver">
+            <tag name="container.decorator" id="doctrine.orm.default_metadata_driver" inner="doctrine.orm.default_metadata_driver_chain.inner"/>
+            <argument type="service" id="doctrine.orm.default_metadata_driver_chain"/>
+        </service>
+
+        <service id="doctrine.orm.default_metadata_driver_chain.inner" class="Doctrine\Persistence\Mapping\Driver\MappingDriverChain">
+            <call method="addDriver">
+                <argument type="service" id="doctrine.orm.default_attribute_metadata_driver"/>
+                <argument>App\Entity</argument>
+            </call>
+            <call method="addDriver">
+                <argument type="service" id="doctrine.orm.default_xml_metadata_driver"/>
+                <argument>App\Entity</argument>
+            </call>
+        </service>
+
+        <service id="doctrine.orm.default_attribute_metadata_driver" class="Doctrine\ORM\Mapping\Driver\AttributeDriver">
+            <argument type="collection">
+                <argument>Entity</argument>
+            </argument>
+            <argument>true</argument>
+        </service>
+
+        <service id="doctrine.orm.default_xml_metadata_driver" class="Doctrine\ORM\Mapping\Driver\SimplifiedXmlDriver">
+            <argument type="collection">
+                <argument key="vendor/doctrine">App\Entity</argument>
+            </argument>
+            <argument>.orm.xml</argument>
+            <argument>false</argument>
+        </service>
+    </services>
+</container>

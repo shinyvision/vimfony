@@ -121,7 +121,7 @@ func (ctx *analysisContext) namespaceForNode(node sitter.Node) string {
 }
 
 func (ctx *analysisContext) qualifyClassName(name, namespace string, uses map[string]string) string {
-	resolved := ctx.resolveRawTypeName(name, uses)
+	resolved := ResolveRawTypeName(name, uses)
 	if resolved == "" {
 		resolved = name
 	}

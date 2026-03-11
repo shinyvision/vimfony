@@ -11,6 +11,7 @@ import (
 	phpforest "github.com/alexaandru/go-sitter-forest/php"
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/config"
+	"github.com/shinyvision/vimfony/internal/doctrine"
 	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/twig"
 	"github.com/shinyvision/vimfony/internal/utils"
@@ -27,6 +28,7 @@ type phpAnalyzer struct {
 	docStore       *php.DocumentStore
 	autoload       config.AutoloadMap
 	path           string
+	doctrine       *doctrine.Registry
 }
 
 type phpCallCtx struct {
@@ -269,6 +271,12 @@ func (a *phpAnalyzer) SetDocumentStore(store *php.DocumentStore) {
 	}
 }
 
+func (a *phpAnalyzer) SetDoctrineRegistry(registry *doctrine.Registry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.doctrine = registry
+}
+
 func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.CompletionItem, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -291,6 +299,11 @@ func (a *phpAnalyzer) OnCompletion(pos protocol.Position) ([]protocol.Completion
 
 	if a.container != nil {
 		items = append(items, a.translationCompletionItems(pos)...)
+	}
+
+	qbItems := a.queryBuilderCompletionItems(pos)
+	if len(qbItems) > 0 {
+		items = append(items, qbItems...)
 	}
 
 	if len(items) == 0 {

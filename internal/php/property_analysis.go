@@ -47,9 +47,8 @@ func (ctx *analysisContext) propertyTypesFromDeclaration(node sitter.Node, uses 
 	var typeNames []string
 	typeNode := node.ChildByFieldName("type")
 	if !typeNode.IsNull() {
-		typeNames = ctx.collectTypeNames(typeNode, uses)
+		typeNames = CollectTypeNames(typeNode, content, uses)
 	} else {
-		// Untyped property
 		typeNames = []string{""}
 	}
 
@@ -83,7 +82,6 @@ func (ctx *analysisContext) propertyTypeFromPromotion(node sitter.Node, uses map
 
 	typeNode := node.ChildByFieldName("type")
 	if typeNode.IsNull() {
-		// Untyped property
 		nameNode := node.ChildByFieldName("name")
 		name := VariableNameFromNode(nameNode, content)
 		if name == "" {
@@ -94,7 +92,7 @@ func (ctx *analysisContext) propertyTypeFromPromotion(node sitter.Node, uses map
 		return name, occ, true
 	}
 
-	typeNames := ctx.collectTypeNames(typeNode, uses)
+	typeNames := CollectTypeNames(typeNode, content, uses)
 	if len(typeNames) == 0 {
 		return "", nil, false
 	}

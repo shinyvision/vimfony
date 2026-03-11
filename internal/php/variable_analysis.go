@@ -56,7 +56,7 @@ func (ctx *analysisContext) collectVariableTypesForFunction(node sitter.Node, us
 			if name == "" {
 				continue
 			}
-			typeNames := ctx.collectTypeNames(param.ChildByFieldName("type"), uses)
+			typeNames := CollectTypeNames(param.ChildByFieldName("type"), content, uses)
 			if len(typeNames) == 0 {
 				continue
 			}
@@ -95,7 +95,7 @@ func (ctx *analysisContext) collectVariableTypesForFunction(node sitter.Node, us
 			}
 			line := int(expr.StartPoint().Row) + 1
 			right := expr.ChildByFieldName("right")
-			inferred := ctx.inferExpressionTypeNames(right, uses, types, properties, line-1)
+			inferred := InferExpressionTypeNames(right, content, uses, types, properties, line-1)
 			docs := pendingDoc[varName]
 			combined := mergeTypeNameLists(docs, inferred)
 			if len(combined) > 0 {
@@ -196,7 +196,7 @@ func (ctx *analysisContext) parseDocblockVar(node sitter.Node, uses map[string]s
 			types = mergeTypeNameLists(types, []string{"array"})
 			continue
 		}
-		resolved := ctx.resolveRawTypeName(part, uses)
+		resolved := ResolveRawTypeName(part, uses)
 		if resolved == "" {
 			resolved = part
 		}
@@ -205,13 +205,34 @@ func (ctx *analysisContext) parseDocblockVar(node sitter.Node, uses map[string]s
 	return varName, types
 }
 
-func (ctx *analysisContext) inferExpressionTypeNames(expr sitter.Node, uses map[string]string, current map[string][]TypeOccurrence, properties map[string][]TypeOccurrence, line int) []string {
+// InferExpressionTypeNames evaluates an expression node and returns the inferred types based on known mappings.
+func InferExpressionTypeNames(expr sitter.Node, content []byte, uses map[string]string, current map[string][]TypeOccurrence, properties map[string][]TypeOccurrence, line int) []string {
 	if expr.IsNull() {
 		return nil
 	}
-	content := ctx.bytes()
 
 	switch expr.Type() {
+	case "member_call_expression":
+		nameNode := expr.ChildByFieldName("name")
+		if !nameNode.IsNull() {
+			methodName := strings.TrimSpace(nameNode.Content(content))
+			if methodName == "getRepository" {
+				return []string{"\\Doctrine\\ORM\\EntityRepository"}
+			}
+			if methodName == "createQueryBuilder" {
+				return []string{"\\Doctrine\\ORM\\QueryBuilder"}
+			}
+			if methodName == "getQuery" {
+				return []string{"\\Doctrine\\ORM\\Query"}
+			}
+
+			// If it's a known fluid method of QueryBuilder or similar, fallback to object type
+			objNode := expr.ChildByFieldName("object")
+			if !objNode.IsNull() {
+				// We don't have full reflection, so we pass through the object's type as a heuristic
+				return InferExpressionTypeNames(objNode, content, uses, current, properties, line)
+			}
+		}
 	case "member_access_expression", "nullsafe_member_access_expression":
 		if name := memberAccessPropertyName(expr, content); name != "" {
 			return TypeNamesFromOccurrences(properties[name])
@@ -237,7 +258,7 @@ func (ctx *analysisContext) inferExpressionTypeNames(expr sitter.Node, uses map[
 		if candidate == "" {
 			return nil
 		}
-		resolved := ctx.resolveRawTypeName(candidate, uses)
+		resolved := ResolveRawTypeName(candidate, uses)
 		if resolved == "" {
 			resolved = candidate
 		}
@@ -254,16 +275,17 @@ func (ctx *analysisContext) inferExpressionTypeNames(expr sitter.Node, uses map[
 		return []string{"null"}
 	case "array_creation_expression":
 		return []string{"array"}
-	case "object_creation_expression":
-		return ctx.collectTypeNames(expr.ChildByFieldName("type"), uses)
-	case "cast_expression":
-		return ctx.collectTypeNames(expr.ChildByFieldName("type"), uses)
+	case "object_creation_expression", "cast_expression":
+		typeNode := expr.ChildByFieldName("type")
+		if !typeNode.IsNull() {
+			return CollectTypeNames(typeNode, content, uses)
+		}
 	case "parenthesized_expression":
 		inner := expr.ChildByFieldName("expression")
 		if inner.IsNull() && expr.NamedChildCount() > 0 {
 			inner = expr.NamedChild(0)
 		}
-		return ctx.inferExpressionTypeNames(inner, uses, current, properties, line)
+		return InferExpressionTypeNames(inner, content, uses, current, properties, line)
 	}
 	return nil
 }

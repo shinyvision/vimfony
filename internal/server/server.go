@@ -4,6 +4,7 @@ import (
 	sitter "github.com/alexaandru/go-tree-sitter-bare"
 	"github.com/shinyvision/vimfony/internal/analyzer"
 	"github.com/shinyvision/vimfony/internal/config"
+	"github.com/shinyvision/vimfony/internal/doctrine"
 	php "github.com/shinyvision/vimfony/internal/php"
 	"github.com/shinyvision/vimfony/internal/state"
 	"github.com/shinyvision/vimfony/internal/utils"
@@ -21,6 +22,7 @@ type Server struct {
 	config   *config.Config
 	state    *state.State
 	docStore *php.DocumentStore
+	doctrine *doctrine.Registry
 	h        protocol.Handler
 }
 
@@ -30,6 +32,7 @@ func NewServer() *Server {
 		config:   config.NewConfig(),
 		state:    state.NewState(store),
 		docStore: store,
+		doctrine: doctrine.NewRegistry(),
 	}
 	s.h = protocol.Handler{
 		Initialize:             s.initialize,
@@ -111,6 +114,12 @@ func (s *Server) initialize(_ *glsp.Context, params *protocol.InitializeParams) 
 	s.config.LoadRoutesMap()
 	s.config.LoadTranslations()
 	s.docStore.Configure(s.config.Autoload, s.config.Container.WorkspaceRoot)
+	s.doctrine.Configure(
+		s.config.Container.DoctrineDrivers,
+		s.config.Autoload,
+		s.config.Container.WorkspaceRoot,
+		s.docStore,
+	)
 
 	logPathStats(s.config, "initialize")
 
@@ -133,7 +142,6 @@ func (s *Server) setTrace(_ *glsp.Context, p *protocol.SetTraceParams) error {
 func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams) error {
 	s.state.SetDocument(p.TextDocument.URI, p.TextDocument.Text, p.TextDocument.LanguageID)
 
-	// Set container config for analyzers that need it
 	if doc, ok := s.state.GetDocument(p.TextDocument.URI); ok {
 		if doc.Analyzer != nil {
 			if ca, ok := doc.Analyzer.(analyzer.ContainerAware); ok {
@@ -147,6 +155,9 @@ func (s *Server) didOpen(_ *glsp.Context, p *protocol.DidOpenTextDocumentParams)
 			}
 			if da, ok := doc.Analyzer.(analyzer.DocumentStoreAware); ok {
 				da.SetDocumentStore(s.docStore)
+			}
+			if da, ok := doc.Analyzer.(analyzer.DoctrineAware); ok {
+				da.SetDoctrineRegistry(s.doctrine)
 			}
 		}
 	}
@@ -164,11 +175,9 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 	text := doc.Text
 	old := []byte(text)
 
-	// UTF-8 bytes
 	pointAt := func(buf []byte, idx int) sitter.Point {
 		var row uint
 		lineStart := 0
-		// fast scan
 		for i := 0; i < idx && i < len(buf); i++ {
 			if buf[i] == '\n' {
 				row++
@@ -202,7 +211,6 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 		return sitter.Point{Row: row, Column: uint(col)}
 	}
 
-	// Applying changes
 	for _, raw := range p.ContentChanges {
 		if wholePage, ok := raw.(*protocol.TextDocumentContentChangeEventWhole); ok {
 			newText := wholePage.Text
@@ -222,7 +230,6 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 			continue
 		}
 
-		// incremental change
 		var changeEvent protocol.TextDocumentContentChangeEvent
 		switch v := raw.(type) {
 		case protocol.TextDocumentContentChangeEvent:
@@ -233,7 +240,6 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 			continue
 		}
 
-		// Convert LSP Range to byte indexes in current text
 		start := changeEvent.Range.Start.IndexIn(text)
 		end := changeEvent.Range.End.IndexIn(text)
 		if start < 0 || end < start || end > len(text) {
@@ -242,7 +248,6 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 
 		inserted := []byte(changeEvent.Text)
 
-		// Build EditInput from before buffer change
 		startPt := pointAt(old, start)
 		oldEndPt := pointAt(old, end)
 
@@ -263,7 +268,6 @@ func (s *Server) didChange(_ *glsp.Context, p *protocol.DidChangeTextDocumentPar
 			NewEndPoint: newEndPt,
 		}
 
-		// Apply to text and update state
 		newText := text[:start] + changeEvent.Text + text[end:]
 		s.state.ChangeDocument(uri, newText, &change)
 

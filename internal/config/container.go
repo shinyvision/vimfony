@@ -30,6 +30,7 @@ type ContainerConfig struct {
 	TranslationRoots  []string
 	TranslationKeys   translations.TranslationMap
 	DefaultLocale     string
+	DoctrineDrivers   []DoctrineDriverMapping
 	twigTemplates     []string
 	twigTemplateSig   string
 	twigMu            sync.Mutex
@@ -54,7 +55,7 @@ func NewContainerConfig() *ContainerConfig {
 		TwigFunctions:     make(map[string]protocol.Location),
 		ServiceReferences: make(map[string]int),
 		TranslationKeys:   make(translations.TranslationMap),
-		DefaultLocale:     "en", // Default to 'en' if not found
+		DefaultLocale:     "en",
 	}
 }
 
@@ -76,7 +77,6 @@ func (c *ContainerConfig) SetContainerXMLPaths(paths []string) {
 	c.ContainerXMLPaths = filtered
 }
 
-// Populates the Config.
 func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 	logger := commonlog.GetLoggerf("vimfony.config")
 	if len(c.ContainerXMLPaths) == 0 {
@@ -87,6 +87,7 @@ func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 	c.ServiceAliases = make(map[string]string)
 	c.ServiceReferences = make(map[string]int)
 	c.TwigFunctions = make(map[string]protocol.Location)
+	c.DoctrineDrivers = nil
 	c.twigMu.Lock()
 	c.twigTemplates = nil
 	c.twigTemplateSig = ""
@@ -96,6 +97,8 @@ func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 	totalBundle := 0
 	totalBundles := make(map[string]struct{})
 	processed := 0
+
+	dc := newDoctrineCollector()
 
 	for idx, relPath := range c.ContainerXMLPaths {
 		if relPath == "" {
@@ -107,7 +110,7 @@ func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 			absPath = filepath.Join(c.WorkspaceRoot, absPath)
 		}
 
-		stats, err := c.loadContainerXML(absPath, autoloadMap)
+		stats, err := c.loadContainerXML(absPath, autoloadMap, dc)
 		if err != nil {
 			logger.Warningf("cannot read container_xml_path[%d] '%s': %v", idx, relPath, err)
 			continue
@@ -128,13 +131,15 @@ func (c *ContainerConfig) LoadFromXML(autoloadMap AutoloadMap) {
 		return
 	}
 
+	c.DoctrineDrivers = dc.resolve(c.ServiceClasses, c.ServiceAliases, c.WorkspaceRoot)
+
 	logger.Infof(
 		"container_xml_path: loaded %d bare roots and %d bundle paths across %d bundles from %d XML files",
 		totalBare, totalBundle, len(totalBundles), processed,
 	)
 }
 
-func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadMap) (containerLoadStats, error) {
+func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadMap, dc *doctrineCollector) (containerLoadStats, error) {
 	logger := commonlog.GetLoggerf("vimfony.config")
 	stats := containerLoadStats{
 		bundlesTouched: make(map[string]struct{}),
@@ -167,6 +172,32 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 	inParameter := false
 	parameterKey := ""
 	var paramBuf strings.Builder
+
+	// Doctrine state: tracks nested context for doctrine-relevant services.
+	// serviceStack holds service IDs for nested <service> elements. The first
+	// element (index 0) is the outermost service.
+	type doctrineServiceFrame struct {
+		id    string
+		class string
+	}
+	var docServiceStack []doctrineServiceFrame
+	docInCall := false
+	docCallMethod := ""
+	var docCallArgBuf strings.Builder
+	var docCallArgs []string
+	docInArg := false
+	var docArgBuf strings.Builder
+	docCollectionDepth := 0
+	type collectionItem struct {
+		key   string
+		value string
+	}
+	var docCollectionItems []collectionItem
+	type docArgFrame struct {
+		argType string
+		argKey  string
+	}
+	var docArgStack []docArgFrame
 
 	for {
 		tok, err := dec.Token()
@@ -230,16 +261,59 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 					}
 				}
 				serviceDepth++
+
+				svcID := ""
+				svcClass := ""
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "id":
+						svcID = a.Value
+					case "class":
+						svcClass = a.Value
+					}
+				}
+				docServiceStack = append(docServiceStack, doctrineServiceFrame{
+					id:    svcID,
+					class: svcClass,
+				})
+				if svcID != "" && isDoctrineDriverClass(svcClass) {
+					dc.serviceArgs[svcID] = &driverServiceArgs{
+						class:      svcClass,
+						keyedPaths: make(map[string]string),
+					}
+				}
+				if svcID == "" && isSymfonyFileLocatorClass(svcClass) && len(docServiceStack) >= 2 {
+					// Inline SymfonyFileLocator: associate with parent service
+					outerID := docServiceStack[len(docServiceStack)-2].id
+					if outerID != "" {
+						dc.inlineServiceArgs[outerID] = &driverServiceArgs{
+							class:      svcClass,
+							keyedPaths: make(map[string]string),
+						}
+					}
+				}
 			} else if serviceDepth > 0 && local == "tag" {
 				name := ""
+				decoratesID := ""
+				innerID := ""
 				for _, a := range t.Attr {
-					if a.Name.Local == "name" {
+					switch a.Name.Local {
+					case "name":
 						name = a.Value
-						break
+					case "id":
+						decoratesID = a.Value
+					case "inner":
+						innerID = a.Value
 					}
 				}
 				if name == "twig.extension" && serviceID != "" && serviceClass != "" {
 					c.indexTwigFunctions(serviceClass, autoloadMap)
+				}
+				if name == "container.decorator" && len(docServiceStack) > 0 {
+					svcFrame := docServiceStack[len(docServiceStack)-1]
+					if svcFrame.id != "" && decoratesID != "" {
+						dc.decorators[svcFrame.id] = [2]string{decoratesID, innerID}
+					}
 				}
 			} else if serviceDepth > 0 && local == "argument" {
 				isServiceArg := false
@@ -254,6 +328,75 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 				}
 				if isServiceArg && serviceIDRef != "" {
 					c.ServiceReferences[serviceIDRef]++
+				}
+			} else if serviceDepth > 0 && local == "call" {
+				method := ""
+				for _, a := range t.Attr {
+					if a.Name.Local == "method" {
+						method = a.Value
+						break
+					}
+				}
+				if method == "addDriver" && len(docServiceStack) > 0 {
+					docInCall = true
+					docCallMethod = method
+					docCallArgs = docCallArgs[:0]
+				}
+			}
+
+			if docInCall && local == "argument" && len(docServiceStack) > 0 {
+				docInArg = false
+				argType := ""
+				argID := ""
+				for _, a := range t.Attr {
+					switch a.Name.Local {
+					case "type":
+						argType = a.Value
+					case "id":
+						argID = a.Value
+					}
+				}
+				if argType == "service" && argID != "" {
+					docCallArgs = append(docCallArgs, argID)
+				} else {
+					docInArg = true
+					docCallArgBuf.Reset()
+				}
+			}
+
+			if !docInCall && local == "argument" && len(docServiceStack) > 0 {
+				frame := docServiceStack[len(docServiceStack)-1]
+				isRelevant := false
+				if frame.id != "" {
+					_, isRelevant = dc.serviceArgs[frame.id]
+				}
+				if !isRelevant && frame.id == "" && len(docServiceStack) >= 2 {
+					outerID := docServiceStack[len(docServiceStack)-2].id
+					_, isRelevant = dc.inlineServiceArgs[outerID]
+				}
+				// Also track if we're already inside a collection of a relevant service
+				if !isRelevant && docCollectionDepth > 0 {
+					isRelevant = true
+				}
+
+				if isRelevant {
+					argType := ""
+					argKey := ""
+					for _, a := range t.Attr {
+						switch a.Name.Local {
+						case "type":
+							argType = a.Value
+						case "key":
+							argKey = a.Value
+						}
+					}
+					docArgStack = append(docArgStack, docArgFrame{argType: argType, argKey: argKey})
+					docArgBuf.Reset()
+
+					if argType == "collection" {
+						docCollectionDepth++
+						docCollectionItems = nil
+					}
 				}
 			}
 
@@ -299,6 +442,12 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 			if inParameter {
 				paramBuf.Write(t)
 			}
+			if docInCall && docInArg {
+				docCallArgBuf.Write(t)
+			}
+			if !docInCall && len(docArgStack) > 0 && docCollectionDepth > 0 {
+				docArgBuf.Write(t)
+			}
 
 		case xml.EndElement:
 			local := t.Name.Local
@@ -311,11 +460,82 @@ func (c *ContainerConfig) loadContainerXML(absPath string, autoloadMap AutoloadM
 				}
 			}
 
+			if docInCall && docInArg && local == "argument" {
+				val := strings.TrimSpace(docCallArgBuf.String())
+				docCallArgs = append(docCallArgs, val)
+				docInArg = false
+				docCallArgBuf.Reset()
+			}
+
+			if docInCall && local == "call" && len(docServiceStack) > 0 {
+				if docCallMethod == "addDriver" && len(docCallArgs) >= 2 {
+					frame := docServiceStack[len(docServiceStack)-1]
+					svcID := frame.id
+					if svcID != "" {
+						dc.addDriverCalls[svcID] = append(
+							dc.addDriverCalls[svcID],
+							[2]string{docCallArgs[0], docCallArgs[1]},
+						)
+					}
+				}
+				docInCall = false
+				docCallMethod = ""
+				docCallArgs = docCallArgs[:0]
+			}
+
+			if !docInCall && local == "argument" && len(docArgStack) > 0 {
+				curArg := docArgStack[len(docArgStack)-1]
+				docArgStack = docArgStack[:len(docArgStack)-1]
+
+				if curArg.argType == "collection" {
+					docCollectionDepth--
+					if docCollectionDepth == 0 {
+						frame := docServiceStack[len(docServiceStack)-1]
+						svcID := frame.id
+
+						if svcID != "" {
+							if args, ok := dc.serviceArgs[svcID]; ok {
+								for _, item := range docCollectionItems {
+									if item.key != "" {
+										args.keyedPaths[item.key] = item.value
+									} else if item.value != "" {
+										args.paths = append(args.paths, item.value)
+									}
+								}
+							}
+						}
+						// Also check if this is an inline service (SymfonyFileLocator)
+						if svcID == "" && len(docServiceStack) >= 2 {
+							outerID := docServiceStack[len(docServiceStack)-2].id
+							if outerID != "" {
+								if args, ok := dc.inlineServiceArgs[outerID]; ok {
+									for _, item := range docCollectionItems {
+										if item.key != "" {
+											args.keyedPaths[item.key] = item.value
+										}
+									}
+								}
+							}
+						}
+						docCollectionItems = nil
+					}
+				} else if docCollectionDepth > 0 {
+					val := strings.TrimSpace(docArgBuf.String())
+					docCollectionItems = append(docCollectionItems, collectionItem{
+						key:   curArg.argKey,
+						value: val,
+					})
+				}
+			}
+
 			if local == "service" {
 				serviceDepth--
 				if serviceDepth == 0 {
 					serviceID = ""
 					serviceClass = ""
+				}
+				if len(docServiceStack) > 0 {
+					docServiceStack = docServiceStack[:len(docServiceStack)-1]
 				}
 			}
 
@@ -431,14 +651,12 @@ func (c *ContainerConfig) indexTwigFunctions(class string, autoloadMap AutoloadM
 	}
 }
 
-// Resolves a service ID to its class name.
+// ResolveServiceId resolves a service ID to its class name.
 func (c *ContainerConfig) ResolveServiceId(serviceID string) (string, bool) {
-	// First, check if it's a direct class
 	if class, ok := c.ServiceClasses[serviceID]; ok {
 		return class, true
 	}
 
-	// If not, check if it's an alias and resolve recursively
 	resolvedID := serviceID
 	for range 10 { // Limit recursion to prevent infinite loops
 		if targetID, ok := c.ServiceAliases[resolvedID]; ok {
@@ -500,9 +718,7 @@ func (c *ContainerConfig) collectTwigTemplates() []string {
 			return
 		}
 		value = strings.ReplaceAll(value, "\\", "/")
-		if strings.HasPrefix(value, "./") {
-			value = value[2:]
-		}
+		value = strings.TrimPrefix(value, "./")
 		if _, ok := seen[value]; ok {
 			return
 		}
