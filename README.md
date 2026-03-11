@@ -12,16 +12,18 @@ We finally have several autocomplete features working in Vimfony!
 - `gd` Twig functions
 - `gd` class from within yaml / xml files
 - `gd` service definitions for example @service_container
+- `gd` routes
+- `gd` translations (only YAML)
+- `gd` Doctrine mapped fields in query builder
 - Autocomplete service names (works in yaml, xml and autoconfigure php attributes)
 - Autocomplete Twig functions
 - Autocomplete Twig variables
 - Autocomplete route names and parameters in Twig files and PHP files
+- Autocomplete Twig files: works in php, twig and yaml (if the key is equal to ‘template’)
+- Autocomplete translations (only YAML)
+- Autocomplete Doctrine mapped fields in query builder
 - Support for Composer’s autoload_classmap for more complete autoloading
 - Support for multiple xml files in container_xml_path, for example in [Sulu](https://github.com/sulu/sulu) projects
-- Autocomplete Twig files: works in php, twig and yaml (if the key is equal to ‘template’)
-- `gd` routes
-- Autocomplete translations (only YAML)
-- `gd` translations (only YAML)
 
 ## Planned features
 These features are not yet implemented but would be useful:
